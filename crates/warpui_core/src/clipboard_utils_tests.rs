@@ -284,6 +284,25 @@ mod image_processing_tests {
         assert!(result.is_none());
     }
 
+    #[test]
+    fn test_near_threshold_image_respects_size_limit() {
+        // 1000×1000 = 1 MP, below the MAX_IMAGE_PIXELS resize threshold (~1.15 MP),
+        // so resize_image() returns the raw PNG bytes unchanged. With NoFilter the
+        // output would be ~3–4.5 MB; with Adaptive it must stay under 3.75 MB.
+        const MAX_IMAGE_SIZE_BYTES: usize = 3_750_000;
+        let w = 1000usize;
+        let h = 1000usize;
+        let rgba_data = create_rgba_data(w, h);
+        let result = convert_raw_bitmap_to_png(w, h, rgba_data, None)
+            .expect("should succeed for 1000x1000 image");
+        assert!(
+            result.data.len() <= MAX_IMAGE_SIZE_BYTES,
+            "PNG size {} exceeds limit {}",
+            result.data.len(),
+            MAX_IMAGE_SIZE_BYTES,
+        );
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn test_windows_image_clipboard_format_candidates() {
