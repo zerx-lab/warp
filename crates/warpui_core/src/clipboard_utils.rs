@@ -571,11 +571,11 @@ pub fn convert_raw_bitmap_to_png(
     let mut png_data = Vec::new();
     let mut cursor = std::io::Cursor::new(&mut png_data);
 
-    // Use fast compression settings to reduce encoding time
+    // Use fast compression with adaptive filtering to keep file size within MAX_IMAGE_SIZE_BYTES
     let encoder = image::codecs::png::PngEncoder::new_with_quality(
         &mut cursor,
         image::codecs::png::CompressionType::Fast,
-        image::codecs::png::FilterType::NoFilter,
+        image::codecs::png::FilterType::Adaptive,
     );
 
     let encode_result = encoder.write_image(
