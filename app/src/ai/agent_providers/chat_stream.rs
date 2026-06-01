@@ -3545,6 +3545,12 @@ pub async fn generate_byop_output(
         // 之后的 chunk 走 AppendToMessageContent 增量追加。
         let mut text_msg_id: Option<String> = None;
         let mut reasoning_msg_id: Option<String> = None;
+        // <think>...</think> 流式提取状态:部分国产 OpenAI 兼容 thinking 模型(如 MiniMax M3)
+        // 把 reasoning 以 <think> 标签形式夹在 /delta/content 中,而非 /delta/reasoning_content
+        // 独立字段。genai 侧仅解析后者,前者作为普通 Chunk 到达,需在此层提取。
+        // `think_active` 标记当前是否在 <think> 块内;`think_buf` 累积块内内容。
+        let mut think_active = false;
+        let mut think_buf = String::new();
         // tool_call 按 call_id 累积 — genai 流式发的 ToolCallChunk 已带完整 ToolCall
         // (since 0.4.0 行为),但跨 chunk 同一 call_id 可能多次出现 args 增量,
         // 用 HashMap 按 id 累积后在流末统一 emit。
@@ -3629,14 +3635,73 @@ pub async fn generate_byop_output(
                 ChatStreamEvent::Chunk(c) if !c.content.is_empty() => {
                     chunk_count += 1;
                     chunk_bytes += c.content.len();
-                    if let Some(id) = text_msg_id.clone() {
-                        yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(c.content)));
-                    } else {
-                        let new_id = Uuid::new_v4().to_string();
-                        let mut msg = make_agent_output_message(&current_task_id, &request_id, c.content);
-                        msg.id = new_id.clone();
-                        text_msg_id = Some(new_id);
-                        yield Ok(make_add_messages_event(&current_task_id, vec![msg]));
+                    // <think> 标签流式提取:把夹在 /delta/content 中的 <think>...</think>
+                    // 段路由到 reasoning 通道,其余内容照常走文本通道。
+                    // 支持标签跨 chunk 边界(think_active / think_buf 持久化跨循环迭代)。
+                    let mut rest: &str = &c.content;
+                    loop {
+                        if think_active {
+                            match rest.find("</think>") {
+                                Some(end) => {
+                                    think_buf.push_str(&rest[..end]);
+                                    let reasoning = std::mem::take(&mut think_buf);
+                                    think_active = false;
+                                    rest = &rest[end + "</think>".len()..];
+                                    if !reasoning.is_empty() {
+                                        reasoning_count += 1;
+                                        reasoning_bytes += reasoning.len();
+                                        super::reasoning::note_reasoning_seen(api_type, &model_id);
+                                        if let Some(id) = reasoning_msg_id.clone() {
+                                            yield Ok(make_append_event(&current_task_id, &id, AppendKind::Reasoning(reasoning)));
+                                        } else {
+                                            let new_id = Uuid::new_v4().to_string();
+                                            let mut msg = make_reasoning_message(&current_task_id, &request_id, reasoning);
+                                            msg.id = new_id.clone();
+                                            reasoning_msg_id = Some(new_id);
+                                            yield Ok(make_add_messages_event(&current_task_id, vec![msg]));
+                                        }
+                                    }
+                                }
+                                None => {
+                                    think_buf.push_str(rest);
+                                    break;
+                                }
+                            }
+                        } else {
+                            match rest.find("<think>") {
+                                Some(start) => {
+                                    let before = rest[..start].to_owned();
+                                    think_active = true;
+                                    rest = &rest[start + "<think>".len()..];
+                                    if !before.is_empty() {
+                                        if let Some(id) = text_msg_id.clone() {
+                                            yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(before)));
+                                        } else {
+                                            let new_id = Uuid::new_v4().to_string();
+                                            let mut msg = make_agent_output_message(&current_task_id, &request_id, before);
+                                            msg.id = new_id.clone();
+                                            text_msg_id = Some(new_id);
+                                            yield Ok(make_add_messages_event(&current_task_id, vec![msg]));
+                                        }
+                                    }
+                                }
+                                None => {
+                                    let text = rest.to_owned();
+                                    if !text.is_empty() {
+                                        if let Some(id) = text_msg_id.clone() {
+                                            yield Ok(make_append_event(&current_task_id, &id, AppendKind::Text(text)));
+                                        } else {
+                                            let new_id = Uuid::new_v4().to_string();
+                                            let mut msg = make_agent_output_message(&current_task_id, &request_id, text);
+                                            msg.id = new_id.clone();
+                                            text_msg_id = Some(new_id);
+                                            yield Ok(make_add_messages_event(&current_task_id, vec![msg]));
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
                 ChatStreamEvent::Chunk(_) => {}

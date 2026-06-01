@@ -250,8 +250,9 @@ const INTERLEAVED_RULES: &[(&str, ReasoningInterleavedField)] = {
         ("glm-4.5-thinking", RC),
         ("glm-4.6-thinking", RC),
         ("glm-4.7", RC),
-        // MiniMax M1 thinking
+        // MiniMax M1 / M3 thinking
         ("minimax-m1", RC),
+        ("minimax-m3", RC),
         // 腾讯混元 T1 thinking
         ("hunyuan-t1", RC),
         // 百度文心 X1 / thinking
