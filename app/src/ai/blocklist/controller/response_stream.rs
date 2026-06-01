@@ -58,6 +58,9 @@ struct ByopDispatch {
     /// 选中模型的上下文窗口(tokens)。0/None ⇒ 用户未填且 catalog 也无,
     /// chat_stream 跳过 context_window_usage 计算,UI 维持 100% 占位。
     context_window: Option<u32>,
+    /// ユーザー設定 (image/pdf/audio 三態 Override) を反映済みの attachment caps。
+    /// `resolve_for_model` で計算。UI 表示と runtime 動作が同じ caps を参照する。
+    attachment_caps: crate::ai::agent_providers::attachment_caps::AttachmentCaps,
 }
 
 /// 标题生成专用的 BYOP 配置(可能与主 base 模型同 provider 也可能不同)。
@@ -122,6 +125,20 @@ fn byop_dispatch_info(
     };
 
     let reasoning_effort = llm_prefs.get_reasoning_effort(None, provider.api_type, &model_id);
+    let attachment_caps = provider
+        .models
+        .iter()
+        .find(|m| m.id == model_id)
+        .map(|m| {
+            crate::ai::agent_providers::attachment_caps::resolve_for_model(
+                &provider.id,
+                provider.api_type,
+                m,
+            )
+        })
+        .unwrap_or_else(|| {
+            crate::ai::agent_providers::attachment_caps::caps_for(provider.api_type, &model_id)
+        });
     Some(ByopDispatch {
         base_url: provider.base_url,
         api_key,
@@ -136,6 +153,7 @@ fn byop_dispatch_info(
         lrc_command_id: params.lrc_command_id.clone(),
         lrc_should_spawn_subagent: params.lrc_should_spawn_subagent,
         context_window,
+        attachment_caps,
     })
 }
 
@@ -269,6 +287,7 @@ impl ResponseStream {
                             lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
                             context_window: byop.context_window,
                             cancellation_rx,
+                            attachment_caps: byop.attachment_caps,
                         },
                     )
                     .await
@@ -376,6 +395,7 @@ impl ResponseStream {
                             lrc_should_spawn_subagent: byop.lrc_should_spawn_subagent,
                             context_window: byop.context_window,
                             cancellation_rx,
+                            attachment_caps: byop.attachment_caps,
                         },
                     )
                     .await

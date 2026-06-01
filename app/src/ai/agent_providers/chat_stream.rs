@@ -381,13 +381,11 @@ fn flush_assistant_buffer(
 fn build_user_message_with_binaries(
     text: String,
     binaries: Vec<user_context::UserBinary>,
-    api_type: AgentProviderApiType,
-    model_id: &str,
+    caps: attachment_caps::AttachmentCaps,
 ) -> ChatMessage {
     if binaries.is_empty() {
         return ChatMessage::user(text);
     }
-    let caps = attachment_caps::caps_for(api_type, model_id);
 
     let mut parts: Vec<ContentPart> = Vec::with_capacity(1 + binaries.len());
     parts.push(ContentPart::Text(text));
@@ -421,8 +419,7 @@ fn build_user_message_with_binaries(
 
     if !error_replacements.is_empty() {
         log::info!(
-            "[byop] {} attachment(s) replaced with ERROR text — model {api_type:?}/{model_id} \
-             does not support: {error_replacements:?}",
+            "[byop] {} attachment(s) replaced with ERROR text — does not support: {error_replacements:?}",
             error_replacements.len()
         );
     }
@@ -1179,7 +1176,7 @@ fn build_chat_request(
     params: &RequestParams,
     force_echo_reasoning: bool,
     api_type: AgentProviderApiType,
-    model_id: &str,
+    attachment_caps: attachment_caps::AttachmentCaps,
 ) -> Result<ChatRequest, ConvertToAPITypeError> {
     let agent_ctx = latest_input_context(&params.input);
     let plan_mode = is_plan_mode_turn(&params.input);
@@ -1382,8 +1379,7 @@ fn build_chat_request(
                     messages.push(build_user_message_with_binaries(
                         history_text,
                         history_binaries,
-                        api_type,
-                        model_id,
+                        attachment_caps,
                     ));
                 }
             }
@@ -1559,8 +1555,7 @@ fn build_chat_request(
                 messages.push(build_user_message_with_binaries(
                     full_text,
                     user_attachments.binaries,
-                    api_type,
-                    model_id,
+                    attachment_caps,
                 ));
             }
             AIAgentInput::ActionResult { result, .. } => {
@@ -1601,8 +1596,7 @@ fn build_chat_request(
                     messages.push(build_user_message_with_binaries(
                         full_text,
                         user_attachments.binaries,
-                        api_type,
-                        model_id,
+                        attachment_caps,
                     ));
                 }
             }
@@ -3178,6 +3172,9 @@ pub struct ByopOutputInput {
     pub lrc_should_spawn_subagent: bool,
     pub context_window: Option<u32>,
     pub cancellation_rx: futures::channel::oneshot::Receiver<()>,
+    /// ユーザー設定 (image/pdf/audio の三態 Override) を反映済みの attachment caps。
+    /// `resolve_for_model` で計算され、UI 表示と runtime 動作を一致させる。
+    pub attachment_caps: attachment_caps::AttachmentCaps,
 }
 
 /// `task_id`: conversation 的 root task id(controller 端从 history model 取)。
@@ -3202,10 +3199,11 @@ pub async fn generate_byop_output(
         lrc_should_spawn_subagent,
         context_window,
         cancellation_rx: _cancellation_rx,
+        attachment_caps,
     } = input;
 
     let force_echo_reasoning = super::reasoning::model_requires_reasoning_echo(api_type, &model_id);
-    let chat_req = build_chat_request(&params, force_echo_reasoning, api_type, &model_id)?;
+    let chat_req = build_chat_request(&params, force_echo_reasoning, api_type, attachment_caps)?;
     let conversation_id = params
         .conversation_token
         .as_ref()
@@ -5811,7 +5809,7 @@ mod serializer_readiness_tests {
     }
 
     fn build_openai_request(params: &RequestParams) -> Result<ChatRequest, ConvertToAPITypeError> {
-        build_chat_request(params, false, AgentProviderApiType::OpenAi, "test-model")
+        build_chat_request(params, false, AgentProviderApiType::OpenAi, attachment_caps::AttachmentCaps::default())
     }
 
     fn assert_request_has_no_repair_placeholder(request: &ChatRequest) {
