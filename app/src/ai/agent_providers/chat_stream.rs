@@ -419,7 +419,7 @@ fn build_user_message_with_binaries(
 
     if !error_replacements.is_empty() {
         log::info!(
-            "[byop] {} attachment(s) replaced with ERROR text — does not support: {error_replacements:?}",
+            "[byop] {} attachment(s) replaced with ERROR text — caps={caps:?} does not support: {error_replacements:?}",
             error_replacements.len()
         );
     }

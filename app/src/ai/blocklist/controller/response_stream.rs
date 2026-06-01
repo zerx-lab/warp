@@ -137,6 +137,10 @@ fn byop_dispatch_info(
             )
         })
         .unwrap_or_else(|| {
+            log::warn!(
+                "[byop] model '{}' not found in provider.models — falling back to caps_for (user overrides ignored)",
+                model_id
+            );
             crate::ai::agent_providers::attachment_caps::caps_for(provider.api_type, &model_id)
         });
     Some(ByopDispatch {
