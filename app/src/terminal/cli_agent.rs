@@ -6,6 +6,8 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
+use std::process::Command;
+use std::sync::{Arc, LazyLock, RwLock};
 
 use ai::skills::SkillProvider;
 use enum_iterator::Sequence;
@@ -563,6 +565,60 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::DeepSeek => CLIAgentType::DeepSeek,
             CLIAgent::Antigravity => CLIAgentType::Antigravity,
             CLIAgent::Unknown => CLIAgentType::Unknown,
+        }
+    }
+}
+
+/// CLI agent 安装状态缓存。应用启动时后台线程填充一次。
+static AGENT_INSTALL_CACHE: LazyLock<Arc<RwLock<Option<HashMap<CLIAgent, bool>>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(None)));
+
+impl CLIAgent {
+    /// 非阻塞读取缓存。缓存未就绪时返回 false，菜单中不展示该 agent。
+    pub fn is_installed(&self) -> bool {
+        AGENT_INSTALL_CACHE
+            .read()
+            .ok()
+            .and_then(|c| c.as_ref().map(|m| m.get(self).copied().unwrap_or(false)))
+            .unwrap_or(false)
+    }
+
+    /// 后台刷新全部 agent 的安装状态，不阻塞 UI。
+    /// 仅在应用启动时调用一次。
+    pub fn refresh_install_cache() {
+        let cache = AGENT_INSTALL_CACHE.clone();
+        std::thread::spawn(move || {
+            let results: HashMap<CLIAgent, bool> = enum_iterator::all::<CLIAgent>()
+                .filter(|a| !matches!(a, CLIAgent::Unknown))
+                .map(|a| (a, a.is_installed_blocking()))
+                .collect();
+            if let Ok(mut guard) = cache.write() {
+                *guard = Some(results);
+            }
+        });
+    }
+
+    /// 同步检测系统是否安装了此 agent。后台线程专用。
+    fn is_installed_blocking(&self) -> bool {
+        let check_cmd = |cmd: &str| -> bool {
+            #[cfg(unix)]
+            let (shell, arg) = ("which", cmd);
+            #[cfg(windows)]
+            let (shell, arg) = ("where", cmd);
+            Command::new(shell)
+                .arg(arg)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        match self {
+            CLIAgent::Unknown => false,
+            // `agent` 太泛化，Cursor CLI 用 cursor-agent 检测
+            CLIAgent::CursorCli => check_cmd("cursor-agent"),
+            // DeepSeek 同时检查主命令和别名
+            CLIAgent::DeepSeek => check_cmd("deepseek") || check_cmd("deepseek-tui"),
+            other => check_cmd(other.command_prefix()),
         }
     }
 }

@@ -102,6 +102,7 @@ use crate::ai::blocklist::FORK_PREFIX;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::terminal::CLIAgent;
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
@@ -3857,6 +3858,18 @@ impl Workspace {
         });
     }
 
+    /// 新建默认终端标签页，然后执行指定 CLI agent 的启动命令。
+    fn add_tab_with_specific_agent(&mut self, agent: CLIAgent, ctx: &mut ViewContext<Self>) {
+        self.add_terminal_tab(false, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if let Some(terminal_view) = pane_group.active_session_view(ctx) {
+                terminal_view.update(ctx, |view, ctx| {
+                    view.execute_command_or_set_pending(agent.command_prefix(), ctx);
+                });
+            }
+        });
+    }
+
     fn toggle_ai_assistant_panel(&mut self, ctx: &mut ViewContext<Self>) {
         // Now that the user has interacted with the panel, we can close
         // the dialogue and mark it as dismissed.
@@ -5794,7 +5807,7 @@ impl Workspace {
     /// Builds the unified new-session menu items
     /// tab bar chevron and the vertical tab bar `+` button.
     ///
-    /// Order: Agent → Terminal (sidecar) → Ambient Agent → [tab configs] → separator → New worktree config (sidecar) → New tab config → separator → Reopen closed session.
+    /// Order: Terminal → User tab configs → separator → Agent → Coding Agents → separator → Docker → Worktree config → New tab config → separator → Reopen closed session.
     fn unified_new_session_menu_items(
         &self,
         ctx: &mut ViewContext<Self>,
@@ -5809,18 +5822,7 @@ impl Workspace {
         let reopen_closed_session_shortcut_label =
             keybinding_name_to_display_string("app:reopen_closed_session", ctx);
 
-        // 1. Agent (if AI enabled)
-        if is_any_ai_enabled {
-            let mut agent_item = MenuItemFields::new(crate::t!("workspace-new-session-agent"))
-                .with_on_select_action(WorkspaceAction::AddAgentTab)
-                .with_icon(icons::Icon::LayoutAlt01);
-            if effective_default == DefaultSessionMode::Agent {
-                agent_item = agent_item.with_key_shortcut_label(shortcut_label.clone());
-            }
-            menu_items.push(agent_item.into_item());
-        }
-
-        // 2. Terminal (+ individual shells on Windows)
+        // 1. Terminal (+ individual shells on Windows)
         {
             // On Windows, list the default terminal and each available shell as
             // individual top-level items (no submenu) so each gets a sidecar.
@@ -5878,24 +5880,10 @@ impl Workspace {
             }
         }
 
-        // 3. Local Docker Sandbox
-        if FeatureFlag::LocalDockerSandbox.is_enabled() {
-            let mut docker_item =
-                MenuItemFields::new(crate::t!("workspace-new-session-local-docker-sandbox"))
-                    .with_on_select_action(WorkspaceAction::AddDockerSandboxTab)
-                    .with_icon(icons::Icon::Docker);
-            if effective_default == DefaultSessionMode::DockerSandbox {
-                docker_item = docker_item.with_key_shortcut_label(shortcut_label.clone());
-            }
-            menu_items.push(docker_item.into_item());
-        }
-
-        // 4. User tab configs
+        // 2. User tab configs
         if FeatureFlag::TabConfigs.is_enabled() {
             let tab_configs = WarpConfig::as_ref(ctx).tab_configs().to_vec();
 
-            // Count occurrences of each config name so we can disambiguate
-            // duplicates in the menu (e.g. "My Tab Config", "My Tab Config (1)").
             let mut name_totals: HashMap<String, usize> = HashMap::new();
             for config in &tab_configs {
                 *name_totals.entry(config.name.clone()).or_default() += 1;
@@ -5937,7 +5925,60 @@ impl Workspace {
             }
         }
 
-        // 5. Separator + worktree config entry + new tab config
+        // 3. Separator — 仅在后面有 Agent 或 Coding Agent 时才显示
+        if is_any_ai_enabled {
+            menu_items.push(MenuItem::Separator);
+        }
+
+        // 4. Agent (if AI enabled)
+        if is_any_ai_enabled {
+            let mut agent_item = MenuItemFields::new(crate::t!("workspace-new-session-agent"))
+                .with_on_select_action(WorkspaceAction::AddAgentTab)
+                .with_icon(icons::Icon::LayoutAlt01);
+            if effective_default == DefaultSessionMode::Agent {
+                agent_item = agent_item.with_key_shortcut_label(shortcut_label.clone());
+            }
+            menu_items.push(agent_item.into_item());
+        }
+
+        // 5. Coding Agents — 仅已安装的出现在菜单中
+        let coding_agent_count = {
+            let start_len = menu_items.len();
+            for agent in enum_iterator::all::<CLIAgent>() {
+                if matches!(agent, CLIAgent::Unknown) {
+                    continue;
+                }
+                if !agent.is_installed() {
+                    continue;
+                }
+                let icon = agent.icon().unwrap_or(icons::Icon::LayoutAlt01);
+                let item = MenuItemFields::new(agent.display_name())
+                    .with_on_select_action(WorkspaceAction::AddSpecificAgentTab(agent))
+                    .with_icon(icon);
+                menu_items.push(item.into_item());
+            }
+            menu_items.len() - start_len
+        };
+
+        // 6. Separator — 仅当 coding agent 有内容且 Docker 启用时才显示
+        // TabConfigs 区域在 step 8 自带分隔线，无需这里重复
+        if coding_agent_count > 0 && FeatureFlag::LocalDockerSandbox.is_enabled() {
+            menu_items.push(MenuItem::Separator);
+        }
+
+        // 7. Local Docker Sandbox
+        if FeatureFlag::LocalDockerSandbox.is_enabled() {
+            let mut docker_item =
+                MenuItemFields::new(crate::t!("workspace-new-session-local-docker-sandbox"))
+                    .with_on_select_action(WorkspaceAction::AddDockerSandboxTab)
+                    .with_icon(icons::Icon::Docker);
+            if effective_default == DefaultSessionMode::DockerSandbox {
+                docker_item = docker_item.with_key_shortcut_label(shortcut_label.clone());
+            }
+            menu_items.push(docker_item.into_item());
+        }
+
+        // 8. Separator + worktree config entry + new tab config
         if FeatureFlag::TabConfigs.is_enabled() {
             menu_items.push(MenuItem::Separator);
             menu_items.push(
@@ -5946,7 +5987,6 @@ impl Workspace {
                     .into_item(),
             );
 
-            // 6. New tab config — V0: opens the TOML template.
             menu_items.push(
                 MenuItemFields::new(crate::t!("workspace-new-tab-config"))
                     .with_on_select_action(WorkspaceAction::SelectNewSessionMenuItem(
@@ -8328,6 +8368,11 @@ impl Workspace {
             Some(WorkspaceAction::AddDockerSandboxTab) => SidecarItemKind::BuiltIn {
                 name: label.to_string(),
                 default_mode: DefaultSessionMode::DockerSandbox,
+                shell: None,
+            },
+            Some(WorkspaceAction::AddSpecificAgentTab(agent)) => SidecarItemKind::BuiltIn {
+                name: agent.display_name().to_string(),
+                default_mode: DefaultSessionMode::Agent,
                 shell: None,
             },
             _ => {
@@ -18549,6 +18594,7 @@ impl TypedActionView for Workspace {
             }
             AddGetStartedTab => self.add_get_started_tab(ctx),
             AddAgentTab => self.add_terminal_tab_with_new_agent_view(ctx),
+            AddSpecificAgentTab(agent) => self.add_tab_with_specific_agent(*agent, ctx),
             AddDockerSandboxTab => self.add_docker_sandbox_tab(ctx),
             StartAgentOnboardingTutorial(tutorial) => {
                 self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)
