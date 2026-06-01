@@ -250,9 +250,11 @@ const INTERLEAVED_RULES: &[(&str, ReasoningInterleavedField)] = {
         ("glm-4.5-thinking", RC),
         ("glm-4.6-thinking", RC),
         ("glm-4.7", RC),
-        // MiniMax M1 / M3 thinking
+        // MiniMax M1 thinking(使用 reasoning_content 字段)
         ("minimax-m1", RC),
-        ("minimax-m3", RC),
+        // MiniMax M3: reasoning 以 <think> 标签夹在 content 中传输,
+        // 多轮 echo 格式待确认(RC 还是 <think>-in-content),暂不加 RC 条目。
+        // 显示修复由 model_uses_think_tags_in_content 白名单 + 流式提取处理。
         // 腾讯混元 T1 thinking
         ("hunyuan-t1", RC),
         // 百度文心 X1 / thinking
@@ -268,6 +270,27 @@ const INTERLEAVED_RULES: &[(&str, ReasoningInterleavedField)] = {
         ("yi-thinking", RC),
     ]
 };
+
+/// OpenAI 兼容 thinking 模型中，把 reasoning 以 `<think>...</think>` 标签形式夹在
+/// `/delta/content` 里传输（而非独立的 `/delta/reasoning_content` 字段）的模型白名单。
+///
+/// 命中此表的模型，chat_stream 流式层会对 Chunk 事件做 `<think>` 标签提取，
+/// 把标签内内容路由到 reasoning 通道显示为灰色思考块。
+/// 未命中的模型保持原有文本输出行为，避免误吞含字面量 `<think>` 的正常输出。
+const THINK_TAG_IN_CONTENT_MODELS: &[&str] = &[
+    // MiniMax M3:reasoning 通过 content 中的 <think> 标签传输。
+    "minimax-m3",
+];
+
+/// 返回指定模型是否通过 `<think>` 标签在 content 中传递 reasoning（而非 reasoning_content 字段）。
+///
+/// chat_stream 流式层用此函数决定是否对 Chunk 事件做 `<think>` 标签提取。
+pub fn model_uses_think_tags_in_content(model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    THINK_TAG_IN_CONTENT_MODELS
+        .iter()
+        .any(|&needle| id.contains(needle))
+}
 
 /// 运行时 latch 集合:记录哪些 (api_type, model_id) 在某次 stream 里发过
 /// `ReasoningChunk` —— 即"该 endpoint 服务端认识 reasoning_content 字段"的
@@ -821,5 +844,23 @@ mod tests {
             AgentProviderApiType::Ollama,
             "qwq-32b"
         ));
+    }
+
+    #[test]
+    fn think_tag_in_content_models() {
+        // MiniMax M3 命中
+        assert!(model_uses_think_tags_in_content("minimax-m3"));
+        assert!(model_uses_think_tags_in_content("MiniMax-M3-80k"));
+        assert!(model_uses_think_tags_in_content("MINIMAX-M3"));
+        // MiniMax M1 不命中(使用 reasoning_content 字段)
+        assert!(!model_uses_think_tags_in_content("minimax-m1"));
+        // 其他 thinking 模型不命中(各自走 reasoning_content 字段)
+        assert!(!model_uses_think_tags_in_content("deepseek-r1"));
+        assert!(!model_uses_think_tags_in_content("gpt-5"));
+        assert!(!model_uses_think_tags_in_content("qwen3-235b"));
+        assert!(!model_uses_think_tags_in_content("kimi-k2-thinking"));
+        // 普通非 thinking 模型不命中
+        assert!(!model_uses_think_tags_in_content("gpt-4o"));
+        assert!(!model_uses_think_tags_in_content("claude-opus-4-7"));
     }
 }
