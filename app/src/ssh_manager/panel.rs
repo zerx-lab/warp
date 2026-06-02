@@ -1113,7 +1113,7 @@ impl SshManagerPanel {
                     .finish(),
             )
             .with_child(refresh_btn)
-            .with_main_axis_size(MainAxisSize::Min)
+            .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .finish();
 
@@ -1313,7 +1313,7 @@ impl SshManagerPanel {
                     .finish(),
             )
             .with_child(trailing)
-            .with_main_axis_size(MainAxisSize::Min)
+            .with_main_axis_size(MainAxisSize::Max)
             .finish();
 
         let row_state = self
@@ -1482,7 +1482,7 @@ impl SshManagerPanel {
             .with_child(chevron_el)
             .with_child(icon_el)
             .with_child(label_or_editor)
-            .with_main_axis_size(MainAxisSize::Min)
+            .with_main_axis_size(MainAxisSize::Max)
             .finish();
 
         let state = self.row_states.get(&node.id).cloned().unwrap_or_default();
@@ -1766,7 +1766,7 @@ impl View for SshManagerPanel {
         let appearance = warp_core::ui::appearance::Appearance::as_ref(app);
 
         let toolbar = Container::new(self.render_toolbar(appearance))
-            .with_uniform_padding(8.0)
+            .with_padding_bottom(PANEL_HORIZONTAL_PADDING)
             .finish();
 
         // PRODUCT.md §2:Candidates 区段在已保存树**上方**,共享同一面板
@@ -1801,6 +1801,7 @@ impl View for SshManagerPanel {
                 .with_child(tree_filled)
                 .finish(),
         )
+        .with_uniform_padding(PANEL_HORIZONTAL_PADDING)
         .finish();
 
         let positioned_panel = SavePosition::new(panel_content, SSH_PANEL_POSITION_ID).finish();
