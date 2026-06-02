@@ -422,20 +422,27 @@ impl Element for Resizable {
         ctx: &mut EventContext,
         app: &AppContext,
     ) -> bool {
+        // Intercept LeftMouseDown on the dragbar before dispatching to children.
+        // Without this, child Draggable elements (e.g. SSH tree rows that stretch to the
+        // full panel width) would also activate on the same click, causing ghost-drag
+        // artifacts while the sidebar resize appears not to work (issue #203).
+        if let crate::Event::LeftMouseDown { position, .. } = event.raw_event() {
+            if self
+                .dragbar
+                .bounds
+                .is_some_and(|bounds| bounds.contains_point(*position))
+            {
+                self.state().begin_resizing(*position);
+                dispatch_callback(self.resize_handler.as_mut(), ctx, app);
+                return true;
+            }
+        }
+
         let child_handled = self.child.dispatch_event(event, ctx, app);
 
         match event.raw_event() {
-            crate::Event::LeftMouseDown { position, .. } => {
-                // If a mouse-down on the dragbar element occurred, put the view into resizing mode
-                if self
-                    .dragbar
-                    .bounds
-                    .is_some_and(|bounds| bounds.contains_point(*position))
-                {
-                    self.state().begin_resizing(*position);
-                    dispatch_callback(self.resize_handler.as_mut(), ctx, app);
-                    return true;
-                }
+            crate::Event::LeftMouseDown { .. } => {
+                // Not on the dragbar — already dispatched to child above.
             }
 
             crate::Event::LeftMouseUp { .. } => {
