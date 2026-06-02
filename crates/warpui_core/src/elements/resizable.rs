@@ -441,10 +441,6 @@ impl Element for Resizable {
         let child_handled = self.child.dispatch_event(event, ctx, app);
 
         match event.raw_event() {
-            crate::Event::LeftMouseDown { .. } => {
-                // Not on the dragbar — already dispatched to child above.
-            }
-
             crate::Event::LeftMouseUp { .. } => {
                 // If a mouse-up occurs, take the view out of resizing mode
                 if self.state().is_resizing() {
