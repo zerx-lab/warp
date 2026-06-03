@@ -582,6 +582,7 @@ impl Transcript {
             icon,
             bottom_right_element,
             appearance,
+            false,
         )
     }
 
@@ -602,7 +603,7 @@ impl Transcript {
         .with_height(16.)
         .with_width(16.)
         .finish();
-        self.render_message(dialogue, background_color, icon, None, appearance)
+        self.render_message(dialogue, background_color, icon, None, appearance, true)
     }
 
     /// Renders a single message (whether that be a user's prompt or assistant's answer).
@@ -613,6 +614,7 @@ impl Transcript {
         icon: Box<dyn Element>,
         bottom_right_element: Option<Box<dyn Element>>,
         appearance: &Appearance,
+        align_right: bool,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let inline_code_bg_color = appearance.theme().surface_3().into_solid();
@@ -740,22 +742,46 @@ impl Transcript {
             );
         }
 
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_child(
-                Container::new(icon)
-                    .with_margin_right(12.)
-                    .with_margin_top(3.)
-                    .finish(),
-            )
-            .with_child(Shrinkable::new(1., Container::new(final_col.finish()).finish()).finish());
+        let icon_container = if align_right {
+            Container::new(icon)
+                .with_margin_left(12.)
+                .with_margin_top(3.)
+                .finish()
+        } else {
+            Container::new(icon)
+                .with_margin_right(12.)
+                .with_margin_top(3.)
+                .finish()
+        };
+
+        let row = if align_right {
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(
+                    Shrinkable::new(1., Container::new(final_col.finish()).finish()).finish(),
+                )
+                .with_child(icon_container)
+        } else {
+            Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(icon_container)
+                .with_child(
+                    Shrinkable::new(1., Container::new(final_col.finish()).finish()).finish(),
+                )
+        };
+
+        let (padding_left, padding_right) = if align_right {
+            (20., PANEL_LEFT_MARGIN)
+        } else {
+            (PANEL_LEFT_MARGIN, 20.)
+        };
 
         Container::new(row.finish())
             .with_background_color(background_color)
-            .with_padding_left(PANEL_LEFT_MARGIN)
+            .with_padding_left(padding_left)
             .with_padding_top(16.)
             .with_padding_bottom(16.)
-            .with_padding_right(20.)
+            .with_padding_right(padding_right)
             .finish()
     }
 
