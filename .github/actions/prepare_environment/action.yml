@@ -35,6 +35,11 @@ runs:
       shell: bash
       run: echo "CARGO_HOME=C:\cargo" >> $GITHUB_ENV
 
+    - name: Add Strawberry Perl to PATH (Windows)
+      if: ${{ inputs.target_os == 'windows' }}
+      shell: bash
+      run: echo "C:/Strawberry/perl/bin" >> $GITHUB_PATH
+
     - name: Determine repository root
       id: repo-root
       shell: bash
