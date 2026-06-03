@@ -12,7 +12,7 @@ use warpui::{
         Container, CornerRadius, CrossAxisAlignment, EventHandler, Fill, Flex,
         FormattedTextElement, HyperlinkUrl, Icon, MainAxisAlignment, MainAxisSize,
         MouseStateHandle, ParentAnchor, ParentElement, Radius, SavePosition, ScrollbarWidth,
-        Shrinkable, Text, Wrap,
+        Expanded, Shrinkable, Text, Wrap,
     },
     keymap::Keystroke,
     platform::Cursor,
@@ -758,7 +758,7 @@ impl Transcript {
             Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_child(
-                    Shrinkable::new(1., Container::new(final_col.finish()).finish()).finish(),
+                    Expanded::new(1., Container::new(final_col.finish()).finish()).finish(),
                 )
                 .with_child(icon_container)
         } else {
