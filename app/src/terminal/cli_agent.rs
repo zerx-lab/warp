@@ -6,7 +6,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 use std::sync::{Arc, LazyLock, RwLock};
 
 use ai::skills::SkillProvider;
@@ -600,27 +599,37 @@ impl CLIAgent {
 
     /// 同步检测系统是否安装了此 agent。后台线程专用。
     fn is_installed_blocking(&self) -> bool {
-        let check_cmd = |cmd: &str| -> bool {
-            #[cfg(unix)]
-            let (shell, arg) = ("which", cmd);
-            #[cfg(windows)]
-            let (shell, arg) = ("where", cmd);
-            Command::new(shell)
-                .arg(arg)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output()
-                .is_ok_and(|o| o.status.success())
-        };
         match self {
             CLIAgent::Unknown => false,
             // `agent` 太泛化，Cursor CLI 用 cursor-agent 检测
-            CLIAgent::CursorCli => check_cmd("cursor-agent"),
+            CLIAgent::CursorCli => is_on_path("cursor-agent"),
             // DeepSeek 同时检查主命令和别名
-            CLIAgent::DeepSeek => check_cmd("deepseek") || check_cmd("deepseek-tui"),
-            other => check_cmd(other.command_prefix()),
+            CLIAgent::DeepSeek => is_on_path("deepseek") || is_on_path("deepseek-tui"),
+            other => is_on_path(other.command_prefix()),
         }
     }
+}
+
+/// 内联 PATH 搜索，零进程、零闪窗。
+#[cfg(unix)]
+fn is_on_path(cmd: &str) -> bool {
+    let Ok(path_var) = std::env::var("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path_var).any(|dir| dir.join(cmd).is_file())
+}
+
+#[cfg(windows)]
+fn is_on_path(cmd: &str) -> bool {
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
+    let Ok(path_var) = std::env::var("PATH") else {
+        return false;
+    };
+    let exts: Vec<&str> = pathext.split(';').collect();
+    std::env::split_paths(&path_var).any(|dir| {
+        exts.iter()
+            .any(|ext| dir.join(format!("{}{}", cmd, ext)).is_file())
+    })
 }
 
 #[cfg(test)]
