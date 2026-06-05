@@ -1672,10 +1672,15 @@ impl EventLoop {
                     // Double-clicking the titlebar does maximize/restore.
                     if click_count >= 2 {
                         window.toggle_maximized();
-                    } else if window_state.last_touch_purpose.is_none() {
+                    } else if window_state.last_touch_purpose.is_none()
+                        && !winit_window.is_maximized()
+                    {
                         // Single-click drag moves the window. Skip for touch events as
                         // drag_window doesn't work properly with touch input on Windows.
                         // We won't receive MouseInput::Released after drag_window.
+                        // Also skip when maximized: calling drag_window on a maximized window
+                        // corrupts OS window state on Windows, causing the window to become
+                        // unable to move or resize after restore. See: issue #220
                         match winit_window.drag_window() {
                             Ok(_) => window_state.current_mouse_button_pressed = None,
                             Err(err) => log::error!("error dragging window: {err:?}"),

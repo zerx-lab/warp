@@ -1130,6 +1130,14 @@ impl Window {
             .unwrap_or(false)
     }
 
+    pub fn is_maximized(&self) -> bool {
+        self.inner
+            .borrow()
+            .as_ref()
+            .map(|inner| inner.window.is_maximized())
+            .unwrap_or(false)
+    }
+
     /// Requests user attention. If the window is in focus, this is a noop.
     pub fn request_user_attention(&self) {
         // Determine which level of user attention urgency to request from the OS.
