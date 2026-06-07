@@ -966,6 +966,13 @@ settings-ai-auto-open-rich-input = コーディングエージェントのセッ
 settings-ai-auto-dismiss-rich-input = プロンプト送信後に Rich Input を自動で閉じる
 settings-ai-toolbar-commands-label = ツールバーを有効化するコマンド
 settings-ai-toolbar-commands-description = マッチするコマンドでコーディングエージェントツールバーを表示する正規表現を追加します。
+settings-ai-per-agent-section = インストール済みエージェント
+settings-ai-per-agent-scanning = インストール済みエージェントを検索しています...
+settings-ai-per-agent-empty = インストール済み CLI エージェントが見つかりません。
+settings-ai-per-agent-agent-col = エージェント
+settings-ai-per-agent-toolbar-col = ツールバー
+settings-ai-per-agent-tab-menu-col = タブメニュー
+settings-ai-per-agent-titlebar-col = タイトルバー
 settings-ai-coding-agent-other = その他
 settings-ai-coding-agent-select-header = コーディングエージェントを選択
 

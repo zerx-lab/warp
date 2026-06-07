@@ -1013,6 +1013,13 @@ settings-ai-auto-open-rich-input = 编码智能体会话启动时自动打开富
 settings-ai-auto-dismiss-rich-input = 提交提示后自动关闭富输入
 settings-ai-toolbar-commands-label = 启用工具栏的命令
 settings-ai-toolbar-commands-description = 添加正则表达式，匹配的命令将显示编码智能体工具栏。
+settings-ai-per-agent-section = 已安装的智能体
+settings-ai-per-agent-scanning = 正在查找已安装的智能体...
+settings-ai-per-agent-empty = 未找到已安装的 CLI 智能体。
+settings-ai-per-agent-agent-col = 智能体
+settings-ai-per-agent-toolbar-col = 工具栏
+settings-ai-per-agent-tab-menu-col = 新标签页
+settings-ai-per-agent-titlebar-col = 标题栏
 settings-ai-coding-agent-other = 其他
 settings-ai-coding-agent-select-header = 选择编码智能体
 

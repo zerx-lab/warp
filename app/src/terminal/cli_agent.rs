@@ -6,8 +6,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, LazyLock, RwLock};
-
 use ai::skills::SkillProvider;
 use enum_iterator::Sequence;
 use markdown_parser::parse_markdown;
@@ -16,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use warp_editor::content::{buffer::Buffer, markdown::MarkdownStyle};
 
-use warpui::{AppContext, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
 use crate::ai::blocklist::CLAUDE_ORANGE;
@@ -568,45 +566,88 @@ impl From<CLIAgent> for CLIAgentType {
     }
 }
 
-/// CLI agent 安装状态缓存。应用启动时后台线程填充一次。
-static AGENT_INSTALL_CACHE: LazyLock<Arc<RwLock<Option<HashMap<CLIAgent, bool>>>>> =
-    LazyLock::new(|| Arc::new(RwLock::new(None)));
+// ── CLI Agent 安装状态 singleton model ──
+// 对齐 AntivirusInfo 模式:ctx.spawn 异步扫描 → 回调 emit 事件 → 订阅者自动刷新 UI
 
-impl CLIAgent {
-    /// 非阻塞读取缓存。缓存未就绪时返回 false，菜单中不展示该 agent。
-    pub fn is_installed(&self) -> bool {
-        AGENT_INSTALL_CACHE
-            .read()
-            .ok()
-            .and_then(|c| c.as_ref().map(|m| m.get(self).copied().unwrap_or(false)))
+/// CLI agent 安装扫描完成事件。
+pub enum CLIAgentInstallEvent {
+    /// 后台扫描完成，安装状态缓存已就绪。
+    ScanComplete,
+}
+
+/// Singleton model，跟踪 CLI agent 的安装状态。
+///
+/// 构造时通过 `ctx.spawn` 启动后台 PATH 扫描，扫描完成后 emit
+/// [`CLIAgentInstallEvent::ScanComplete`] 并自动同步 per-agent 设置。
+///
+/// 所有需要查询安装状态的 UI 代码应通过 `CLIAgentInstallModel::as_ref(ctx)`
+/// 读取，并订阅事件以在扫描完成后触发重绘。
+pub struct CLIAgentInstallModel {
+    /// None = 扫描尚未完成; Some = 已有结果。
+    cache: Option<HashMap<CLIAgent, bool>>,
+}
+
+impl CLIAgentInstallModel {
+    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        ctx.spawn(
+            async move {
+                enum_iterator::all::<CLIAgent>()
+                    .filter(|a| !matches!(a, CLIAgent::Unknown))
+                    .map(|a| (a, cli_agent_is_on_path(a)))
+                    .collect::<HashMap<CLIAgent, bool>>()
+            },
+            Self::on_scan_complete,
+        );
+        Self { cache: None }
+    }
+
+    fn on_scan_complete(
+        &mut self,
+        results: HashMap<CLIAgent, bool>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.cache = Some(results.clone());
+
+        // 自动同步到 per-agent 设置
+        crate::settings::AISettings::handle(ctx).update(ctx, |settings, ctx| {
+            settings.sync_per_agent_from_scan(&results, ctx);
+        });
+
+        ctx.emit(CLIAgentInstallEvent::ScanComplete);
+    }
+
+    /// 查询某个 agent 是否已安装。扫描未完成时返回 false。
+    pub fn is_cli_agent_installed(&self, agent: CLIAgent) -> bool {
+        self.cache
+            .as_ref()
+            .map(|m| m.get(&agent).copied().unwrap_or(false))
             .unwrap_or(false)
     }
 
-    /// 后台刷新全部 agent 的安装状态，不阻塞 UI。
-    /// 仅在应用启动时调用一次。
-    pub fn refresh_install_cache() {
-        let cache = AGENT_INSTALL_CACHE.clone();
-        std::thread::spawn(move || {
-            let results: HashMap<CLIAgent, bool> = enum_iterator::all::<CLIAgent>()
-                .filter(|a| !matches!(a, CLIAgent::Unknown))
-                .map(|a| (a, a.is_installed_blocking()))
-                .collect();
-            if let Ok(mut guard) = cache.write() {
-                *guard = Some(results);
-            }
-        });
+    /// 扫描是否已完成。
+    pub fn is_scan_complete(&self) -> bool {
+        self.cache.is_some()
     }
 
-    /// 同步检测系统是否安装了此 agent。后台线程专用。
-    fn is_installed_blocking(&self) -> bool {
-        match self {
-            CLIAgent::Unknown => false,
-            // `agent` 太泛化，Cursor CLI 用 cursor-agent 检测
-            CLIAgent::CursorCli => is_on_path("cursor-agent"),
-            // DeepSeek 同时检查主命令和别名
-            CLIAgent::DeepSeek => is_on_path("deepseek") || is_on_path("deepseek-tui"),
-            other => is_on_path(other.command_prefix()),
-        }
+    /// 获取安装状态快照。扫描未完成时返回 None。
+    pub fn snapshot(&self) -> Option<HashMap<CLIAgent, bool>> {
+        self.cache.clone()
+    }
+}
+
+impl Entity for CLIAgentInstallModel {
+    type Event = CLIAgentInstallEvent;
+}
+
+impl SingletonEntity for CLIAgentInstallModel {}
+
+/// 同步 PATH 搜索，检测指定 agent 是否安装。仅供 `ctx.spawn` 异步任务内部使用。
+fn cli_agent_is_on_path(agent: CLIAgent) -> bool {
+    match agent {
+        CLIAgent::Unknown => false,
+        CLIAgent::CursorCli => is_on_path("cursor-agent"),
+        CLIAgent::DeepSeek => is_on_path("deepseek") || is_on_path("deepseek-tui"),
+        other => is_on_path(other.command_prefix()),
     }
 }
 

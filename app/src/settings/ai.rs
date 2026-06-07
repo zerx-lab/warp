@@ -1128,6 +1128,48 @@ impl settings_value::SettingsValue for BYOPLastUsedReasoningMap {
     }
 }
 
+/// Per-agent 设置：控制单个 CLI agent 的工具栏、标签页菜单和标题栏可见性。
+/// key 是 CLIAgent 序列化名（例如 "Claude", "Gemini"）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PerAgentSettings {
+    /// 是否在终端输入底部展示编码智能体工具栏。
+    #[serde(default = "default_true_bool")]
+    pub toolbar: bool,
+    /// 是否在新建标签页菜单中展示该 agent 的快速启动入口。
+    #[serde(default = "default_true_bool", alias = "tab_menu")]
+    pub tabmenu: bool,
+    /// 是否在标题栏右侧展示该 agent 的快捷启动按钮。
+    #[serde(default)]
+    pub titlebar: bool,
+}
+
+fn default_true_bool() -> bool {
+    true
+}
+
+impl PerAgentSettings {
+    /// 返回指定 agent 的默认值。titlebar 对 Claude/Codex/Gemini/Antigravity 默认开启。
+    pub fn default_for(agent: CLIAgent) -> Self {
+        let titlebar = matches!(
+            agent,
+            CLIAgent::Claude | CLIAgent::Codex | CLIAgent::Gemini | CLIAgent::Antigravity
+        );
+        Self { toolbar: true, tabmenu: true, titlebar }
+    }
+}
+
+impl Default for PerAgentSettings {
+    fn default() -> Self {
+        Self {
+            toolbar: true,
+            tabmenu: true,
+            titlebar: false,
+        }
+    }
+}
+
+impl settings_value::SettingsValue for PerAgentSettings {}
+
 define_settings_group!(AISettings, settings: [
     // 历史遗留设置。Zap 的 Zap 智能体现在固定开启,不要用这个字段判断启用状态。
     is_any_ai_enabled: IsAnyAIEnabled {
@@ -1910,6 +1952,29 @@ define_settings_group!(AISettings, settings: [
         max_table_depth: 1,
         description: "Per-(api_type, model) reasoning effort memory for BYOP picker.",
     }
+
+    // Per-agent 设置：控制单个 CLI agent 的工具栏和标签页菜单可见性。
+    // key 是 CLIAgent::to_serialized_name() 的结果。
+    cli_agent_per_agent_settings: CLIAgentPerAgentSettings {
+        type: HashMap<String, PerAgentSettings>,
+        default: HashMap::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.third_party.per_agent",
+        max_table_depth: 1,
+        description: "Per-agent visibility settings for toolbar and tab menu.",
+    }
+
+    // 是否已完成至少一次 CLI agent 安装扫描。
+    // 首次打开第三方智能体设置页时,若该标记为 false 则自动触发一次同步。
+    cli_agent_scan_completed: CLIAgentScanCompleted {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+    }
 ]);
 
 impl AISettings {
@@ -2344,6 +2409,131 @@ impl AISettings {
         report_if_error!(self
             .plugin_update_chip_dismissed_for_version_map
             .set_value(map, ctx));
+    }
+
+    // ── Per-agent settings ──
+
+    /// 查询某个 CLI agent 的工具栏是否启用。未在 per-agent 设置中出现时取 agent 默认值。
+    pub fn is_cli_agent_toolbar_enabled(&self, agent: CLIAgent) -> bool {
+        if matches!(agent, CLIAgent::Unknown) {
+            return true;
+        }
+        self.cli_agent_per_agent_settings
+            .get(agent.to_serialized_name().as_str())
+            .map(|s| s.toolbar)
+            .unwrap_or_else(|| PerAgentSettings::default_for(agent).toolbar)
+    }
+
+    /// 查询某个 CLI agent 是否在新建标签页菜单中显示。未在 per-agent 设置中出现时取 agent 默认值。
+    pub fn is_cli_agent_tab_menu_enabled(&self, agent: CLIAgent) -> bool {
+        if matches!(agent, CLIAgent::Unknown) {
+            return false;
+        }
+        self.cli_agent_per_agent_settings
+            .get(agent.to_serialized_name().as_str())
+            .map(|s| s.tabmenu)
+            .unwrap_or_else(|| PerAgentSettings::default_for(agent).tabmenu)
+    }
+
+    /// 查询某个 CLI agent 的标题栏按钮是否启用。未在 per-agent 设置中出现时取 agent 默认值。
+    pub fn is_cli_agent_titlebar_enabled(&self, agent: CLIAgent) -> bool {
+        if matches!(agent, CLIAgent::Unknown) {
+            return false;
+        }
+        self.cli_agent_per_agent_settings
+            .get(agent.to_serialized_name().as_str())
+            .map(|s| s.titlebar)
+            .unwrap_or_else(|| PerAgentSettings::default_for(agent).titlebar)
+    }
+
+    /// 设置单个 agent 的工具栏启用状态。
+    pub fn set_cli_agent_toolbar(
+        &mut self,
+        agent: CLIAgent,
+        enabled: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let key = agent.to_serialized_name();
+        let mut map = self.cli_agent_per_agent_settings.clone();
+        map.entry(key)
+            .and_modify(|s| s.toolbar = enabled)
+            .or_insert_with(|| PerAgentSettings { toolbar: enabled, ..PerAgentSettings::default_for(agent) });
+        report_if_error!(self.cli_agent_per_agent_settings.set_value(map, ctx));
+    }
+
+    /// 设置单个 agent 的标签页菜单启用状态。
+    pub fn set_cli_agent_tab_menu(
+        &mut self,
+        agent: CLIAgent,
+        enabled: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let key = agent.to_serialized_name();
+        let mut map = self.cli_agent_per_agent_settings.clone();
+        map.entry(key)
+            .and_modify(|s| s.tabmenu = enabled)
+            .or_insert_with(|| PerAgentSettings { tabmenu: enabled, ..PerAgentSettings::default_for(agent) });
+        report_if_error!(self.cli_agent_per_agent_settings.set_value(map, ctx));
+    }
+
+    /// 设置单个 agent 的标题栏按钮启用状态。
+    pub fn set_cli_agent_titlebar(
+        &mut self,
+        agent: CLIAgent,
+        enabled: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let key = agent.to_serialized_name();
+        let mut map = self.cli_agent_per_agent_settings.clone();
+        map.entry(key)
+            .and_modify(|s| s.titlebar = enabled)
+            .or_insert_with(|| PerAgentSettings { titlebar: enabled, ..PerAgentSettings::default_for(agent) });
+        report_if_error!(self.cli_agent_per_agent_settings.set_value(map, ctx));
+    }
+
+    /// 根据安装扫描结果同步 per-agent 设置。
+    /// - 新检测到的 agent 写入默认值(toolbar=true, tabmenu=true)
+    /// - 已卸载的 agent 从设置中移除
+    /// - 标注扫描完成
+    pub fn sync_per_agent_from_scan(
+        &mut self,
+        installed: &HashMap<CLIAgent, bool>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let installed_agents: Vec<CLIAgent> = installed
+            .iter()
+            .filter(|(a, v)| **v && !matches!(a, CLIAgent::Unknown))
+            .map(|(a, _)| *a)
+            .collect();
+        let installed_names: std::collections::HashSet<String> = installed_agents
+            .iter()
+            .map(|a| a.to_serialized_name())
+            .collect();
+
+        let mut per_agent = self.cli_agent_per_agent_settings.clone();
+
+        for agent in &installed_agents {
+            per_agent
+                .entry(agent.to_serialized_name())
+                .or_insert_with(|| PerAgentSettings::default_for(*agent));
+        }
+
+        // 已卸载的 agent → 移除
+        per_agent.retain(|name, _| installed_names.contains(name.as_str()));
+
+        let changed = &per_agent != self.cli_agent_per_agent_settings.value();
+        if changed {
+            report_if_error!(self.cli_agent_per_agent_settings.set_value(per_agent, ctx));
+        }
+
+        if !*self.cli_agent_scan_completed.value() {
+            report_if_error!(self.cli_agent_scan_completed.set_value(true, ctx));
+        }
+    }
+
+    /// 返回是否已完成至少一次 CLI agent 安装扫描。
+    pub fn is_cli_agent_scan_completed(&self) -> bool {
+        *self.cli_agent_scan_completed.value()
     }
 }
 

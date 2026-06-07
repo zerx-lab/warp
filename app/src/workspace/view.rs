@@ -102,6 +102,7 @@ use crate::ai::blocklist::FORK_PREFIX;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::terminal::cli_agent::{CLIAgentInstallEvent, CLIAgentInstallModel};
 use crate::terminal::CLIAgent;
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
@@ -2588,6 +2589,14 @@ impl Workspace {
         ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cli_agent_sessions_event(event, ctx);
         });
+
+        // CLI agent 安装扫描完成后刷新 UI（新 tab 菜单、标题栏按钮等）
+        ctx.subscribe_to_model(
+            &CLIAgentInstallModel::handle(ctx),
+            |_, _, CLIAgentInstallEvent::ScanComplete, ctx| {
+                ctx.notify();
+            },
+        );
 
         ctx.subscribe_to_model(
             &SessionSettings::handle(ctx),
@@ -5960,14 +5969,20 @@ impl Workspace {
             menu_items.push(agent_item.into_item());
         }
 
-        // 5. Coding Agents — 仅已安装的出现在菜单中
+        // 5. Coding Agents — 仅已安装且 tab_menu 启用的出现在菜单中
         let coding_agent_count = {
             let start_len = menu_items.len();
+            let ai_settings = AISettings::as_ref(ctx);
+            let install_model = CLIAgentInstallModel::as_ref(ctx);
             for agent in enum_iterator::all::<CLIAgent>() {
                 if matches!(agent, CLIAgent::Unknown) {
                     continue;
                 }
-                if !agent.is_installed() {
+                if !install_model.is_cli_agent_installed(agent) {
+                    continue;
+                }
+                // 检查 per-agent tab_menu 设置
+                if !ai_settings.is_cli_agent_tab_menu_enabled(agent) {
                     continue;
                 }
                 let icon = agent.icon().unwrap_or(icons::Icon::LayoutAlt01);
@@ -16158,6 +16173,11 @@ impl Workspace {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min);
 
+            // 标题栏 agent 快捷启动按钮（垂直标签栏模式）
+            for button in self.render_cli_agent_titlebar_buttons(appearance, ctx) {
+                right_controls.add_child(button);
+            }
+
             self.add_configurable_right_side_tab_bar_controls(
                 &mut right_controls,
                 &config,
@@ -16297,6 +16317,11 @@ impl Workspace {
         // Placeholder to make sure the flex row expands across the entire width of the app.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
 
+        // 标题栏 agent 快捷启动按钮（水平标签栏模式）
+        for button in self.render_cli_agent_titlebar_buttons(appearance, ctx) {
+            tab_bar.add_child(button);
+        }
+
         self.add_configurable_right_side_tab_bar_controls(
             &mut tab_bar,
             &config,
@@ -16369,6 +16394,80 @@ impl Workspace {
             .with_margin_left(TAB_BAR_ICON_PADDING)
             .finish(),
         )
+    }
+
+    /// 渲染标题栏上已安装 CLI agent 的快捷启动按钮。
+    /// 只显示 per-agent 设置中 titlebar 标记为 true 的 agent。
+    fn render_cli_agent_titlebar_buttons(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Vec<Box<dyn Element>> {
+        let ai_settings = AISettings::as_ref(ctx);
+        let install_model = CLIAgentInstallModel::as_ref(ctx);
+        let mut buttons = Vec::new();
+
+        for agent in enum_iterator::all::<CLIAgent>() {
+            if matches!(agent, CLIAgent::Unknown) || !install_model.is_cli_agent_installed(agent) {
+                continue;
+            }
+            if !ai_settings.is_cli_agent_titlebar_enabled(agent) {
+                continue;
+            }
+
+            let agent_key = agent.to_serialized_name();
+            let mut states = self
+                .mouse_states
+                .cli_agent_titlebar_button_states
+                .borrow_mut();
+            let handle = states
+                .entry(agent_key.clone())
+                .or_insert_with(MouseStateHandle::default)
+                .clone();
+
+            let icon = agent.icon().unwrap_or(icons::Icon::LayoutAlt01);
+            let theme = appearance.theme();
+            let icon_color = theme.sub_text_color(theme.background());
+            let button = icon_button_with_color(
+                appearance,
+                icon,
+                false,
+                handle.clone(),
+                icon_color,
+            )
+            .with_hovered_styles(UiComponentStyles {
+                font_color: Some(icon_color.into()),
+                background: Some(theme.surface_2().into()),
+                ..UiComponentStyles::default()
+            })
+            .with_clicked_styles(UiComponentStyles {
+                font_color: Some(icon_color.into()),
+                background: Some(theme.background().into()),
+                ..UiComponentStyles::default()
+            })
+            // 图标缩小到 14×14：padding 从 4 增大到 5.0，按钮外框 24×24 不变
+            .with_style(UiComponentStyles::default()
+                .set_padding(Coords::uniform(5.0))
+            );
+
+            let agent_name = agent.display_name().to_string();
+            let button = button
+                .with_tooltip(
+                    self.render_tab_bar_icon_button_tooltip(appearance, agent_name, None),
+                )
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(WorkspaceAction::AddSpecificAgentTab(agent));
+                });
+
+            buttons.push(
+                Container::new(button.finish())
+                    .with_margin_left(TAB_BAR_ICON_PADDING)
+                    .finish(),
+            );
+        }
+
+        buttons
     }
 
     /// Renders the notifications mailbox button (extracted for reuse from

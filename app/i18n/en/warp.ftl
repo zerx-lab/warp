@@ -1030,6 +1030,13 @@ settings-ai-auto-open-rich-input = Auto open Rich Input when a coding agent sess
 settings-ai-auto-dismiss-rich-input = Auto dismiss Rich Input after prompt submission
 settings-ai-toolbar-commands-label = Commands that enable the toolbar
 settings-ai-toolbar-commands-description = Add regex patterns to show the coding agent toolbar for matching commands.
+settings-ai-per-agent-section = Installed agents
+settings-ai-per-agent-scanning = Looking for installed agents...
+settings-ai-per-agent-empty = No installed CLI agents found.
+settings-ai-per-agent-agent-col = Agent
+settings-ai-per-agent-toolbar-col = Toolbar
+settings-ai-per-agent-tab-menu-col = Tab menu
+settings-ai-per-agent-titlebar-col = Title bar
 settings-ai-coding-agent-other = Other
 settings-ai-coding-agent-select-header = Select coding agent
 

@@ -296,7 +296,7 @@ impl TerminalView {
             .map(|s| s.agent);
 
         // Check the appropriate setting based on whether this is a CLI agent command
-        if cli_agent.is_some() {
+        if let Some(agent) = cli_agent {
             // For CLI agent commands, only check the CLI agent footer setting.
             // This is independent of the global AI toggle so that users who
             // disable Zap AI still get the footer for third-party coding agents.
@@ -304,7 +304,11 @@ impl TerminalView {
                 return false;
             }
 
-            // If a CLIAgent is active, we always want to show the agent footer.
+            // Check per-agent toolbar setting; default is true if not configured.
+            if !ai_settings.is_cli_agent_toolbar_enabled(agent) {
+                return false;
+            }
+
             return true;
         }
 

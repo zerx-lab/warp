@@ -31,6 +31,7 @@ use crate::settings::{
     VoiceInputEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::cli_agent::{CLIAgentInstallEvent, CLIAgentInstallModel};
 use crate::terminal::CLIAgent;
 use crate::view_components::{
     action_button::{ActionButton, ButtonSize, SecondaryTheme},
@@ -47,10 +48,13 @@ use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment, Dismiss, Expanded, Fill,
-    HyperlinkLens, MainAxisAlignment, MainAxisSize, MouseStateHandle, Radius, Shrinkable, Text,
+    Border, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment, Dismiss, Empty, Expanded,
+    Fill, Hoverable, HyperlinkLens, MainAxisAlignment, MainAxisSize, MouseStateHandle, Radius, Shrinkable,
+    Text,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::text_layout::TextAlignment;
 use warpui::id;
 use warpui::keymap::ContextPredicate;
 use warpui::ui_components::slider::SliderStateHandle;
@@ -931,6 +935,14 @@ impl AISettingsPageView {
         ctx.subscribe_to_model(&InputSettings::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
         });
+
+        // CLI agent 安装扫描完成后刷新设置页（per-agent 表格出现）
+        ctx.subscribe_to_model(
+            &CLIAgentInstallModel::handle(ctx),
+            |_, _, CLIAgentInstallEvent::ScanComplete, ctx| {
+                ctx.notify();
+            },
+        );
 
         let current_permission =
             BlocklistAIPermissions::as_ref(ctx).active_permissions_profile(ctx, None);
@@ -2170,6 +2182,14 @@ impl Entity for AISettingsPageView {
     type Event = AISettingsPageEvent;
 }
 
+/// Per-agent 可见性维度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PerAgentDimension {
+    Toolbar,
+    TabMenu,
+    Titlebar,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AISettingsPageAction {
     OpenUrl(String),
@@ -2183,6 +2203,8 @@ pub enum AISettingsPageAction {
     ToggleAIInputAutoDetection,
     ToggleNLDInTerminal,
     ToggleCLIAgentToolbar,
+    /// 切换单个 CLI agent 的指定维度可见性。
+    ToggleCLIAgentPerAgent(CLIAgent, PerAgentDimension),
     ToggleUseAgentToolbar,
     ToggleVoiceInput,
     ToggleCanUseWarpCreditsWithByok,
@@ -2582,6 +2604,26 @@ impl TypedActionView for AISettingsPageView {
                         log::warn!("Failed to set value for CLI Agent Footer setting: {e:?}");
                     }
                 }
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleCLIAgentPerAgent(agent, dim) => {
+                let settings = AISettings::as_ref(ctx);
+                let current = match dim {
+                    PerAgentDimension::Toolbar => settings.is_cli_agent_toolbar_enabled(*agent),
+                    PerAgentDimension::TabMenu => settings.is_cli_agent_tab_menu_enabled(*agent),
+                    PerAgentDimension::Titlebar => settings.is_cli_agent_titlebar_enabled(*agent),
+                };
+                AISettings::handle(ctx).update(ctx, |settings, ctx| match dim {
+                    PerAgentDimension::Toolbar => {
+                        settings.set_cli_agent_toolbar(*agent, !current, ctx);
+                    }
+                    PerAgentDimension::TabMenu => {
+                        settings.set_cli_agent_tab_menu(*agent, !current, ctx);
+                    }
+                    PerAgentDimension::Titlebar => {
+                        settings.set_cli_agent_titlebar(*agent, !current, ctx);
+                    }
+                });
                 ctx.notify();
             }
             AISettingsPageAction::ToggleAutoToggleRichInput => {
@@ -5624,10 +5666,7 @@ impl AIFactWidget {
                 "{} ",
                 crate::t!("settings-ai-rules-description")
             )),
-            FormattedTextFragment::hyperlink(
-                crate::t!("settings-ai-learn-more"),
-                "",
-            ),
+            FormattedTextFragment::hyperlink(crate::t!("settings-ai-learn-more"), ""),
         ];
         let description = Container::new(
             FormattedTextElement::new(
@@ -5990,6 +6029,25 @@ pub(crate) fn cli_agent_settings_widget_id() -> &'static str {
     CLIAgentWidget::static_widget_id()
 }
 
+// ── Per-agent chip 布局常量 ──
+const CHIP_HEIGHT: f32 = 28.;
+const CHIP_HORIZONTAL_PADDING: f32 = 10.;
+const CHIP_CORNER_RADIUS: f32 = 4.;
+const CHIP_GAP: f32 = 8.;
+const CHIP_WIDTH: f32 = 92.;
+const CHIP_CHECK_ICON_SIZE: f32 = 12.;
+const CHIP_CHECK_ICON_GAP: f32 = 4.;
+const PER_AGENT_ACTIONS_WIDTH: f32 = CHIP_WIDTH * 3. + CHIP_GAP * 2.;
+const AGENT_ICON_SIZE: f32 = 16.;
+const AGENT_ICON_MARGIN_RIGHT: f32 = 8.;
+const ROW_HORIZONTAL_PADDING: f32 = 8.;
+const ROW_VERTICAL_PADDING: f32 = 6.;
+const ROW_CORNER_RADIUS: f32 = 4.;
+const ROW_GAP: f32 = 4.;
+const PER_AGENT_SECTION_MARGIN_TOP: f32 = 16.;
+const PER_AGENT_SECTION_MARGIN_BOTTOM: f32 = 8.;
+type PerAgentChipKey = (CLIAgent, PerAgentDimension);
+
 #[derive(Default)]
 struct CLIAgentWidget {
     cli_agent_footer_toggle: SwitchStateHandle,
@@ -5997,6 +6055,8 @@ struct CLIAgentWidget {
     auto_toggle_rich_input_info_tooltip: MouseStateHandle,
     auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
     auto_dismiss_rich_input_toggle: SwitchStateHandle,
+    /// Per-agent chip hover state, keyed by agent and visibility dimension.
+    per_agent_chip_states: RefCell<HashMap<PerAgentChipKey, MouseStateHandle>>,
 }
 
 impl SettingsWidget for CLIAgentWidget {
@@ -6068,6 +6128,13 @@ impl SettingsWidget for CLIAgentWidget {
                     .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
                     .finish(),
             );
+
+        column.add_child(self.render_per_agent_settings_section(
+            ai_settings,
+            is_footer_enabled,
+            appearance,
+            app,
+        ));
 
         if is_footer_enabled {
             use super::settings_page::AdditionalInfo;
@@ -6259,6 +6326,222 @@ impl SettingsWidget for CLIAgentWidget {
         }
 
         column.finish()
+    }
+}
+
+impl CLIAgentWidget {
+    fn render_per_agent_settings_section(
+        &self,
+        ai_settings: &AISettings,
+        is_footer_enabled: bool,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let ui_font_family = appearance.ui_font_family();
+        let install_model = CLIAgentInstallModel::as_ref(app);
+        let installed_agents: Vec<CLIAgent> = enum_iterator::all::<CLIAgent>()
+            .filter(|a| !matches!(a, CLIAgent::Unknown) && install_model.is_cli_agent_installed(*a))
+            .collect();
+
+        let mut column = Flex::column().with_child(
+            Container::new(
+                appearance
+                    .ui_builder()
+                    .span(crate::t!("settings-ai-per-agent-section"))
+                    .with_style(UiComponentStyles {
+                        font_size: Some(appearance.ui_font_body()),
+                        font_color: Some(styles::header_font_color(true, app).into()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            )
+            .with_margin_top(PER_AGENT_SECTION_MARGIN_TOP)
+            .with_margin_bottom(PER_AGENT_SECTION_MARGIN_BOTTOM)
+            .finish(),
+        );
+
+        if !install_model.is_scan_complete() {
+            column.add_child(render_ai_setting_description(
+                crate::t!("settings-ai-per-agent-scanning"),
+                true,
+                app,
+            ));
+            return column.finish();
+        }
+
+        if installed_agents.is_empty() {
+            column.add_child(render_ai_setting_description(
+                crate::t!("settings-ai-per-agent-empty"),
+                true,
+                app,
+            ));
+            return column.finish();
+        }
+
+        for agent in installed_agents {
+            let icon = agent
+                .icon()
+                .unwrap_or(crate::ui_components::icons::Icon::LayoutAlt01);
+            let agent_name_text = appearance
+                .ui_builder()
+                .wrappable_text(agent.display_name().to_string(), true)
+                .with_style(UiComponentStyles {
+                    font_color: Some(theme.foreground().into_solid()),
+                    font_family_id: Some(ui_font_family),
+                    font_size: Some(appearance.ui_font_size()),
+                    ..Default::default()
+                })
+                .build()
+                .finish();
+
+            let toolbar_chip = self.render_cli_agent_visibility_chip(
+                crate::t!("settings-ai-per-agent-toolbar-col").to_string(),
+                ai_settings.is_cli_agent_toolbar_enabled(agent),
+                is_footer_enabled,
+                agent,
+                PerAgentDimension::Toolbar,
+                appearance,
+            );
+            let tab_menu_chip = self.render_cli_agent_visibility_chip(
+                crate::t!("settings-ai-per-agent-tab-menu-col").to_string(),
+                ai_settings.is_cli_agent_tab_menu_enabled(agent),
+                true,
+                agent,
+                PerAgentDimension::TabMenu,
+                appearance,
+            );
+            let titlebar_chip = self.render_cli_agent_visibility_chip(
+                crate::t!("settings-ai-per-agent-titlebar-col").to_string(),
+                ai_settings.is_cli_agent_titlebar_enabled(agent),
+                true,
+                agent,
+                PerAgentDimension::Titlebar,
+                appearance,
+            );
+            let actions = ConstrainedBox::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(CHIP_GAP)
+                    .with_children([toolbar_chip, tab_menu_chip, titlebar_chip])
+                    .finish(),
+            )
+            .with_width(PER_AGENT_ACTIONS_WIDTH)
+            .finish();
+
+            let row = Container::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_children([
+                        Container::new(
+                            ConstrainedBox::new(icon.to_warpui_icon(theme.foreground()).finish())
+                                .with_width(AGENT_ICON_SIZE)
+                                .with_height(AGENT_ICON_SIZE)
+                                .finish(),
+                        )
+                        .with_margin_right(AGENT_ICON_MARGIN_RIGHT)
+                        .finish(),
+                        Expanded::new(1., agent_name_text).finish(),
+                        actions,
+                    ])
+                    .finish(),
+            )
+            .with_background(theme.surface_1())
+            .with_horizontal_padding(ROW_HORIZONTAL_PADDING)
+            .with_vertical_padding(ROW_VERTICAL_PADDING)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
+            .with_margin_bottom(ROW_GAP)
+            .finish();
+
+            column.add_child(row);
+        }
+
+        column.finish()
+    }
+
+    fn render_cli_agent_visibility_chip(
+        &self,
+        label: String,
+        is_enabled: bool,
+        is_clickable: bool,
+        agent: CLIAgent,
+        dimension: PerAgentDimension,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let background = if is_enabled {
+            internal_colors::accent_overlay_2(theme)
+        } else {
+            internal_colors::fg_overlay_1(theme)
+        };
+        let border_fill = if is_enabled {
+            Fill::Solid(theme.accent().into_solid())
+        } else {
+            Fill::Solid(pathfinder_color::ColorU::transparent_black())
+        };
+        let text_color = if is_enabled && is_clickable {
+            internal_colors::text_main(theme, theme.background().into_solid())
+        } else {
+            internal_colors::text_sub(theme, theme.background().into_solid())
+        };
+        let icon_color = warp_core::ui::theme::Fill::Solid(text_color);
+        let ui_font_family = appearance.ui_font_family();
+        let mouse = self
+            .per_agent_chip_states
+            .borrow_mut()
+            .entry((agent, dimension))
+            .or_insert_with(MouseStateHandle::default)
+            .clone();
+
+        let mut chip = Hoverable::new(mouse, move |_| {
+            let mut content = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_alignment(MainAxisAlignment::Center);
+            if is_enabled {
+                content.add_child(
+                    ConstrainedBox::new(Icon::Check.to_warpui_icon(icon_color).finish())
+                        .with_width(CHIP_CHECK_ICON_SIZE)
+                        .with_height(CHIP_CHECK_ICON_SIZE)
+                        .finish(),
+                );
+                content.add_child(
+                    ConstrainedBox::new(Empty::new().finish())
+                        .with_width(CHIP_CHECK_ICON_GAP)
+                        .finish(),
+                );
+            }
+            content.add_child(
+                FormattedTextElement::from_str(label.clone(), ui_font_family, 13.)
+                    .with_color(text_color)
+                    .with_weight(Weight::Normal)
+                    .with_alignment(TextAlignment::Center)
+                    .with_line_height_ratio(1.0)
+                    .finish(),
+            );
+
+            let container = Container::new(content.finish())
+                .with_horizontal_padding(CHIP_HORIZONTAL_PADDING)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CHIP_CORNER_RADIUS)))
+                .with_background(background)
+                .with_border(Border::all(1.).with_border_fill(border_fill));
+
+            ConstrainedBox::new(container.finish())
+                .with_width(CHIP_WIDTH)
+                .with_height(CHIP_HEIGHT)
+                .finish()
+        });
+
+        if is_clickable {
+            chip = chip.with_cursor(Cursor::PointingHand).on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(AISettingsPageAction::ToggleCLIAgentPerAgent(
+                    agent, dimension,
+                ));
+            });
+        }
+
+        chip.finish()
     }
 }
 
@@ -6523,9 +6806,13 @@ impl AwsBedrockWidget {
                 ..Default::default()
             };
 
-            let label = Text::new_inline(label, appearance.ui_font_family(), appearance.ui_font_body())
-                .with_color(styles::header_font_color(is_enabled, app).into())
-                .finish();
+            let label = Text::new_inline(
+                label,
+                appearance.ui_font_family(),
+                appearance.ui_font_body(),
+            )
+            .with_color(styles::header_font_color(is_enabled, app).into())
+            .finish();
 
             let input = appearance
                 .ui_builder()
@@ -6568,16 +6855,24 @@ impl AwsBedrockWidget {
                 .with_cross_axis_alignment(CrossAxisAlignment::Start)
                 .with_spacing(4.)
                 .with_child(
-                    Text::new_inline(title_text, appearance.ui_font_family(), appearance.ui_font_body())
-                        .with_style(Properties::default().weight(Weight::Semibold))
-                        .with_color(title_color.into())
-                        .finish(),
+                    Text::new_inline(
+                        title_text,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_style(Properties::default().weight(Weight::Semibold))
+                    .with_color(title_color.into())
+                    .finish(),
                 )
                 .with_child(
-                    Text::new(detail_text, appearance.ui_font_family(), appearance.ui_font_body())
-                        .with_color(detail_color.into())
-                        .soft_wrap(true)
-                        .finish(),
+                    Text::new(
+                        detail_text,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(detail_color.into())
+                    .soft_wrap(true)
+                    .finish(),
                 );
 
             Container::new(
