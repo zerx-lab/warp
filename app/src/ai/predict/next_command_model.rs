@@ -396,7 +396,11 @@ impl NextCommandModel {
         // BYOP cfg 必须在 spawn 前解出(spawn 内拿不到 &AppContext)。
         // 用 None terminal_view_id 走全局当前 active profile。
         let byop_cfg = byop_next_command::resolve(ctx, None);
-        // 全局 Rules 同样在 spawn 前解出,仅在 memory 功能启用时收集。
+        // 全局 Rules 同样在 spawn 前解出(spawn 内拿不到 &AppContext)。
+        // gate 与 chat 路径(`api.rs::RequestParams::new`)保持一致:两者都用
+        // `is_memory_enabled` 作为上游统一门控,属于产品层设计决定,非防御性代码。
+        // `collect_user_rules` 只遍历 `ObjectStoreModel.objects_by_id`(纯内存 HashMap),
+        // 不触发任何 IO,与上方的 `byop_next_command::resolve` 开销同量级。
         let user_rules = if AISettings::as_ref(ctx).is_memory_enabled(ctx) {
             collect_user_rules(ObjectStoreModel::as_ref(ctx))
         } else {
