@@ -35,8 +35,10 @@ use super::generate_ai_input_suggestions::{
     GenerateAIInputSuggestionsRequest, GenerateAIInputSuggestionsResponseV2, NextCommandContext,
 };
 
+use crate::ai::agent::api::collect_user_rules;
 use crate::ai::agent_providers::active_ai::next_command as byop_next_command;
 use crate::ai::agent_providers::oneshot::OneshotConfig;
+use crate::cloud_object::model::persistence::ObjectStoreModel;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -56,6 +58,7 @@ const MAX_NUM_SIMILAR_HISTORY_CONTEXT: usize = 25;
 async fn byop_generate_input_suggestions(
     byop_cfg: Option<OneshotConfig>,
     request: &GenerateAIInputSuggestionsRequest,
+    user_rules: Vec<(Option<String>, String)>,
 ) -> Result<GenerateAIInputSuggestionsResponseV2, AIApiError> {
     let Some(cfg) = byop_cfg else {
         // Zap 已剥云,无 BYOP 配置时不再 fallback ServerApi —— 返回空响应,
@@ -77,6 +80,7 @@ async fn byop_generate_input_suggestions(
         system_context: request.system_context.clone(),
         prefix: request.prefix.clone(),
         rejected_suggestions: request.rejected_suggestions.clone(),
+        user_rules,
     };
     let suggestion = byop_next_command::run_with(cfg, input).await;
     match suggestion {
@@ -392,6 +396,12 @@ impl NextCommandModel {
         // BYOP cfg 必须在 spawn 前解出(spawn 内拿不到 &AppContext)。
         // 用 None terminal_view_id 走全局当前 active profile。
         let byop_cfg = byop_next_command::resolve(ctx, None);
+        // 全局 Rules 同样在 spawn 前解出,仅在 memory 功能启用时收集。
+        let user_rules = if AISettings::as_ref(ctx).is_memory_enabled(ctx) {
+            collect_user_rules(ObjectStoreModel::as_ref(ctx))
+        } else {
+            Vec::new()
+        };
 
         let completion_context = completer_data.completion_session_context(ctx);
         // This is only needed if we have a prefix.
@@ -513,7 +523,7 @@ impl NextCommandModel {
                     // For zero-state next command suggestions, return the result immediately.
                     let Some(prefix) = prefix else {
                         return (
-                            byop_generate_input_suggestions(byop_cfg.clone(), &request).await,
+                            byop_generate_input_suggestions(byop_cfg.clone(), &request, user_rules.clone()).await,
                             request,
                             true,
                             start_ts_ms,
@@ -594,7 +604,7 @@ impl NextCommandModel {
                     };
 
                     // Only if we have no commands from history and no completions, use the LLM to generate a partial suggestion.
-                    let response = byop_generate_input_suggestions(byop_cfg, &request).await;
+                    let response = byop_generate_input_suggestions(byop_cfg, &request, user_rules).await;
                     (
                         response,
                         request,

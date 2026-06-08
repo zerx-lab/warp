@@ -379,6 +379,12 @@ pub mod next_command {
     use super::*;
     use warpui::{AppContext, EntityId};
 
+    #[derive(Debug, Serialize)]
+    struct UserRuleCtx {
+        name: Option<String>,
+        content: String,
+    }
+
     pub struct Input {
         pub recent_blocks: Vec<BlockSnippet>,
         /// 已在 client 端从历史 DB 选出的相似命令上下文(可选)。
@@ -388,6 +394,8 @@ pub mod next_command {
         pub prefix: Option<String>,
         /// 之前已 reject 的建议(避免重复)。
         pub rejected_suggestions: Vec<String>,
+        /// 用户在 设置 → Agents → Rules 中配置的全局规则快照。
+        pub user_rules: Vec<(Option<String>, String)>,
     }
 
     /// Pre-spawn:解 BYOP 配置(需要 `&AppContext`)。`None` ⇒ 静默 no-op。
@@ -398,7 +406,14 @@ pub mod next_command {
     /// In-spawn:用 cfg + Input 渲染 prompt 并发请求。
     /// 模板渲染不依赖 AppContext,可在 spawn 内同步调用。
     pub async fn run_with(cfg: OneshotConfig, input: Input) -> Option<String> {
-        let system = render("next_command_system.j2", context! {});
+        let user_rule_ctxs: Vec<UserRuleCtx> = input
+            .user_rules
+            .into_iter()
+            .map(|(name, content)| UserRuleCtx { name, content })
+            .collect();
+        let system = render("next_command_system.j2", context! {
+            user_rules => user_rule_ctxs,
+        });
         let user = render(
             "next_command_user.j2",
             context! {
