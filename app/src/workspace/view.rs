@@ -8323,9 +8323,7 @@ impl Workspace {
                 })
                 .with_cursor(Cursor::PointingHand)
                 .on_click(|ctx: &mut warpui::elements::EventContext, _, _| {
-                    // PersistedWorkspace 已下线,这里不再弹「添加仓库」选择器,
-                    // 仅关闭当前菜单。UI 按钮临时保留,后续可考虑理调。
-                    ctx.dispatch_typed_action(crate::menu::MenuAction::Close(true));
+                    ctx.dispatch_typed_action(WorkspaceAction::OpenNewWorktreeModal);
                 })
                 .finish()
             });
