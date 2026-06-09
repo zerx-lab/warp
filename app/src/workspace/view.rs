@@ -18653,6 +18653,7 @@ impl TypedActionView for Workspace {
                 });
                 self.new_worktree_modal.open();
                 self.current_workspace_state.is_new_worktree_modal_open = true;
+                self.close_new_session_dropdown_menu(ctx);
                 ctx.notify();
             }
             OpenNewWorktreeRepoPicker => {
