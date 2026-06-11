@@ -115,6 +115,11 @@ fn main() -> Result<()> {
     }
 
     if target_os == "windows" {
+        println!("cargo:rustc-link-arg-bin=zap-oss=/EXPORT:NvOptimusEnablement,DATA");
+        println!(
+            "cargo:rustc-link-arg-bin=zap-oss=/EXPORT:AmdPowerXpressRequestHighPerformance,DATA"
+        );
+
         // Retrieve the Cargo profile name so that we can put a copy of ConPTY in
         // the correct target subdirectory.
         //

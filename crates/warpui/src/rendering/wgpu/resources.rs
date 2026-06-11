@@ -342,6 +342,7 @@ pub(super) fn sort_adapters(
         .sorted_by_cached_key(|adapter| {
             adapter_stability_sort_func(
                 adapter,
+                gpu_power_preference,
                 windowing_system,
                 downrank_non_nvidia_vulkan_adapters,
             )
@@ -697,6 +698,7 @@ fn adapter_backend_sort_func(
 /// us to attempt to use it than for us to give up without trying.
 fn adapter_stability_sort_func(
     adapter: &wgpu::Adapter,
+    gpu_power_preference: &GPUPowerPreference,
     windowing_system: Option<windowing::System>,
     downrank_non_nvidia_vulkan_adapters: bool,
 ) -> AdapterSupport {
@@ -741,7 +743,9 @@ fn adapter_stability_sort_func(
             *MIN_SUPPORTED_NVIDIA_VERSION
         );
         AdapterSupport::Unsupported
-    } else if is_newer_nondx12_nvidia_adapter_on_windows(&adapter_info) {
+    } else if is_newer_nondx12_nvidia_adapter_on_windows(&adapter_info)
+        && !matches!(gpu_power_preference, GPUPowerPreference::HighPerformance)
+    {
         log::warn!(
             "Deprioritizing non DX12 Nvidia adapter due to version > {} (unsupported). Newer NVIDIA \
             drivers can crash if multiple windows are created if the `Vulkan / OpenGL Present Method\

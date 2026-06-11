@@ -9,6 +9,16 @@ use warp_core::{
     AppId,
 };
 
+#[cfg(target_os = "windows")]
+#[no_mangle]
+#[used]
+pub static NvOptimusEnablement: u32 = 1;
+
+#[cfg(target_os = "windows")]
+#[no_mangle]
+#[used]
+pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
+
 // Zap OSS 构建的入口,简单包一层 warp::run()。
 fn main() -> Result<()> {
     let mut state = ChannelState::new(
