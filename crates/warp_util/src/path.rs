@@ -474,7 +474,7 @@ pub fn convert_wsl_to_windows_host_path(
             for component in unix_path
                 .with_windows_encoding()
                 .components()
-                .skip_while(|component| *component == TypedComponent::Unix(UnixComponent::RootDir))
+                .skip(1)
             {
                 windows_path.push(component.as_bytes());
             }
