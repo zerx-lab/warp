@@ -557,6 +557,14 @@ impl RightPanelView {
     ) {
         let pane_group_id = pane_group.id();
 
+        // Unsubscribe from the previous pane group before subscribing to the
+        // new one. Without this, every tab switch appends a duplicate
+        // subscription, causing recompute_terminal_availability to fire N
+        // times per event after N switches.
+        if let Some(prev) = &self.active_pane_group {
+            ctx.unsubscribe_to_view(prev);
+        }
+
         // Subscribe to pane group events so we can recompute terminal
         // availability when terminal state changes (e.g. command
         // starts/finishes).
