@@ -150,3 +150,30 @@ impl WebConfig {
 		builder
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn set_proxy_settings_valid_http_url() {
+		let mut cfg = WebConfig::default();
+		assert!(cfg.set_proxy_settings("http://proxy.corp:8080", "", "", "").is_ok());
+		assert!(cfg.proxy.is_some());
+	}
+
+	#[test]
+	fn set_proxy_settings_socks5_url() {
+		let mut cfg = WebConfig::default();
+		assert!(cfg.set_proxy_settings("socks5://127.0.0.1:1080", "", "", "").is_ok());
+		assert!(cfg.proxy.is_some());
+	}
+
+	#[test]
+	fn set_proxy_settings_invalid_url_returns_err() {
+		let mut cfg = WebConfig::default();
+		// Malformed IPv6 bracket causes reqwest::Proxy::all to return Err.
+		assert!(cfg.set_proxy_settings("http://[invalid", "", "", "").is_err());
+		assert!(cfg.proxy.is_none());
+	}
+}

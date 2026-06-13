@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive", "rc"] } # Opted to rc for Arc<T> 
 serde_json = "1"
 serde_with = "3"
 # -- Web
-reqwest = {version = "0.13",  features = ["json", "stream", "gzip"]}
+reqwest = {version = "0.13",  features = ["json", "stream", "gzip", "socks"]}
 eventsource-stream = "0.2"
 bytes = "1.6"
 # -- File
