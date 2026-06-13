@@ -55,6 +55,7 @@ use genai::chat::{
 };
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ModelIden, ServiceTarget, WebConfig};
+use http_client::current_proxy_config;
 
 use crate::ai::agent::api::{RequestParams, ResponseStream};
 use crate::ai::agent::{AIAgentActionResult, AIAgentInput, RunningCommand, UserQueryMode};
@@ -2869,11 +2870,22 @@ pub(super) fn build_client(
     if let Ok(value) = build_user_agent_header() {
         headers.insert(reqwest::header::USER_AGENT, value);
     }
-    let web_config = WebConfig {
+    let mut web_config = WebConfig {
         gzip: false,
         default_headers: Some(headers),
         ..WebConfig::default()
     };
+    let proxy_cfg = current_proxy_config();
+    if proxy_cfg.mode == http_client::ProxyMode::Custom && !proxy_cfg.url.is_empty() {
+        if let Err(err) = web_config.set_proxy_settings(
+            &proxy_cfg.url,
+            &proxy_cfg.username,
+            &proxy_cfg.password,
+            &proxy_cfg.no_proxy,
+        ) {
+            log::warn!("[byop] proxy URL '{}' 无效,跳过代理配置: {err}", proxy_cfg.url);
+        }
+    }
     Client::builder()
         .with_web_config(web_config)
         .with_service_target_resolver(resolver)

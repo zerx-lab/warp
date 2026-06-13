@@ -92,6 +92,30 @@ impl WebConfig {
 		Ok(self)
 	}
 
+	/// Sets proxy from a URL with optional credentials and no-proxy host list.
+	///
+	/// Called from application code where the workspace reqwest version differs from
+	/// this library's reqwest, so all proxy construction is done here within this library.
+	pub fn set_proxy_settings(
+		&mut self,
+		url: &str,
+		username: &str,
+		password: &str,
+		no_proxy: &str,
+	) -> Result<(), reqwest::Error> {
+		let mut proxy = reqwest::Proxy::all(url)?;
+		if !username.is_empty() || !password.is_empty() {
+			proxy = proxy.basic_auth(username, password);
+		}
+		if !no_proxy.trim().is_empty() {
+			if let Some(no_proxy_val) = reqwest::NoProxy::from_string(no_proxy.trim()) {
+				proxy = proxy.no_proxy(Some(no_proxy_val));
+			}
+		}
+		self.proxy = Some(proxy);
+		Ok(())
+	}
+
 	/// Applies this config to a reqwest::ClientBuilder.
 	pub fn apply_to_builder(&self, mut builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
 		if let Some(timeout) = self.timeout {
