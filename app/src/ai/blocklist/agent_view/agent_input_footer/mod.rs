@@ -1690,6 +1690,9 @@ impl AgentInputFooter {
             BlocklistAIHistoryModel::as_ref(ctx).active_conversation(self.terminal_view_id)
         {
             let usage = conversation.context_window_usage();
+            if usage == 0.0 {
+                return;
+            }
             let icon = icon_for_context_window_usage(usage);
             let remaining_pct = ((1.0 - usage) * 100.0).round() as i32;
             let tooltip = format!("{remaining_pct}% context remaining");
