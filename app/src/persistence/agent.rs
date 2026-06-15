@@ -60,8 +60,18 @@ pub(super) fn upsert_agent_conversation<'a>(
             .execute(conn)?;
 
         // Upsert each task
+        const MAX_TASK_BLOB_BYTES: usize = 10 * 1024 * 1024; // 10 MB
         for task in tasks {
             let task_binary = task.encode_to_vec();
+            if task_binary.len() > MAX_TASK_BLOB_BYTES {
+                log::warn!(
+                    "Task {} BLOB is {} bytes (limit {}), skipping persistence to avoid startup crash",
+                    task.id,
+                    task_binary.len(),
+                    MAX_TASK_BLOB_BYTES,
+                );
+                continue;
+            }
             let new_task = NewAgentTask {
                 conversation_id: conversation_id_param.to_owned(),
                 task_id: task.id.clone(),
