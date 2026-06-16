@@ -2348,8 +2348,11 @@ fn serialize_outgoing_tool_call(
     if tc.tool.is_none() {
         if let Some((fn_name, raw_args)) = server_message_data.split_once('\n') {
             if !fn_name.is_empty() {
-                let args_value = serde_json::from_str(raw_args)
-                    .unwrap_or_else(|_| Value::String(raw_args.to_owned()));
+                // When raw_args is invalid JSON (e.g. model emitted \e or \` escape),
+                // fall back to an empty object so the provider receives valid JSON
+                // rather than a JSON string wrapping the invalid content (which causes
+                // "Invalid \escape" 400 on the next turn).
+                let args_value = serde_json::from_str(raw_args).unwrap_or_else(|_| json!({}));
                 return (fn_name.to_owned(), args_value);
             }
         }
