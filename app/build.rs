@@ -28,6 +28,7 @@ fn main() -> Result<()> {
 
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
     let target_family = env::var("CARGO_CFG_TARGET_FAMILY")?;
+    let target_env = env::var("CARGO_CFG_TARGET_ENV")?;
 
     add_features(&target_family, &target_os);
 
@@ -115,10 +116,12 @@ fn main() -> Result<()> {
     }
 
     if target_os == "windows" {
-        println!("cargo:rustc-link-arg-bin=zap-oss=/EXPORT:NvOptimusEnablement,DATA");
-        println!(
-            "cargo:rustc-link-arg-bin=zap-oss=/EXPORT:AmdPowerXpressRequestHighPerformance,DATA"
-        );
+        if target_env == "msvc" {
+            println!("cargo:rustc-link-arg-bin=zap-oss=/EXPORT:NvOptimusEnablement,DATA");
+            println!(
+                "cargo:rustc-link-arg-bin=zap-oss=/EXPORT:AmdPowerXpressRequestHighPerformance,DATA"
+            );
+        }
 
         // Retrieve the Cargo profile name so that we can put a copy of ConPTY in
         // the correct target subdirectory.

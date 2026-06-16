@@ -10,11 +10,13 @@ use warp_core::{
 };
 
 #[cfg(target_os = "windows")]
+#[allow(non_upper_case_globals)]
 #[no_mangle]
 #[used]
 pub static NvOptimusEnablement: u32 = 1;
 
 #[cfg(target_os = "windows")]
+#[allow(non_upper_case_globals)]
 #[no_mangle]
 #[used]
 pub static AmdPowerXpressRequestHighPerformance: u32 = 1;

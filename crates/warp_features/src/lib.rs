@@ -59,6 +59,9 @@ pub enum FeatureFlag {
     /// discrete GPU.
     IntegratedGPU,
 
+    /// Defaults Windows builds to the high-performance GPU with Vulkan as the preferred backend.
+    WindowsHighPerformanceGpuDefault,
+
     /// Zap Agent Mode.
     AgentMode,
 

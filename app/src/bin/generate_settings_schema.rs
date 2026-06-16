@@ -104,6 +104,9 @@ fn active_flags_for_channel(channel: &str) -> HashSet<FeatureFlag> {
         }
     }
 
+    #[cfg(feature = "windows_high_performance_gpu_default")]
+    flags.insert(FeatureFlag::WindowsHighPerformanceGpuDefault);
+
     flags
 }
 
@@ -168,6 +171,11 @@ fn main() {
     }
 
     let active_flags = active_flags_for_channel(channel);
+    for flag in &active_flags {
+        flag.set_enabled(true);
+    }
+    warp_core::features::mark_initialized();
+
     let mut generator = SchemaGenerator::default();
     let mut root_properties = Map::new();
     let mut entry_count = 0;
