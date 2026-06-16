@@ -758,7 +758,13 @@ impl Transcript {
             Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_child(
-                    Expanded::new(1., Container::new(final_col.finish()).finish()).finish(),
+                    Expanded::new(
+                        1.,
+                        Align::new(Container::new(final_col.finish()).finish())
+                            .right()
+                            .finish(),
+                    )
+                    .finish(),
                 )
                 .with_child(icon_container)
         } else {
