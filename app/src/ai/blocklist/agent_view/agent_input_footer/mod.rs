@@ -1696,6 +1696,13 @@ impl AgentInputFooter {
             // least a nonzero token fraction, so 0.0 unambiguously means "no data yet"
             // — keep the button's initial neutral tooltip rather than show "100% remaining".
             if usage == 0.0 {
+                self.context_window_button.update(ctx, |button, ctx| {
+                    button.set_icon(Some(Icon::ConversationContext0), ctx);
+                    button.set_tooltip(
+                        Some(crate::t!("ai-footer-context-window-usage-tooltip")),
+                        ctx,
+                    );
+                });
                 return;
             }
             let icon = icon_for_context_window_usage(usage);
