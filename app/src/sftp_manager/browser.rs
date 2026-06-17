@@ -1860,15 +1860,9 @@ impl View for SftpBrowserView {
                 self.dialog_cancel_btn.clone(),
                 self.dialog_close_btn.clone(),
             );
-            let centered_dialog = Flex::column()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::Center)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(dialog_el)
-                .finish();
             let mut stack = Stack::new();
             stack.add_child(main_content);
-            stack.add_overlay_child(centered_dialog);
+            stack.add_overlay_child(Align::new(dialog_el).finish());
             main_content = stack.finish();
         }
 
