@@ -25,6 +25,7 @@ use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use warp_completer::parsers::simple::top_level_command;
 use warp_util::path::EscapeChar;
+use crate::terminal::local_shell::LocalShellState;
 
 /// UID for the Uber team.
 /// See https://warp.metabaseapp.com/dashboard/1454?team_id=46347
@@ -589,11 +590,25 @@ pub struct CLIAgentInstallModel {
 
 impl CLIAgentInstallModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        // Use the interactive login-shell PATH so agents installed via Homebrew,
+        // nvm, cargo, etc. are found even when Zap is launched from the macOS Dock
+        // (which only inherits a minimal system PATH). Mirrors the same fix applied
+        // to plugin auto-install in agent_input_footer.
+        #[cfg(feature = "local_tty")]
+        let path_future = LocalShellState::handle(ctx).update(ctx, |state, ctx| {
+            state.get_interactive_path_env_var(ctx)
+        });
+        #[cfg(not(feature = "local_tty"))]
+        let path_future: futures::future::BoxFuture<'static, Option<String>> = {
+            use futures::FutureExt;
+            futures::future::ready(None).boxed()
+        };
         ctx.spawn(
             async move {
+                let path_env = path_future.await;
                 enum_iterator::all::<CLIAgent>()
                     .filter(|a| !matches!(a, CLIAgent::Unknown))
-                    .map(|a| (a, cli_agent_is_on_path(a)))
+                    .map(|a| (a, cli_agent_is_on_path(a, path_env.as_deref())))
                     .collect::<HashMap<CLIAgent, bool>>()
             },
             Self::on_scan_complete,
@@ -642,18 +657,24 @@ impl Entity for CLIAgentInstallModel {
 impl SingletonEntity for CLIAgentInstallModel {}
 
 /// 同步 PATH 搜索，检测指定 agent 是否安装。仅供 `ctx.spawn` 异步任务内部使用。
-fn cli_agent_is_on_path(agent: CLIAgent) -> bool {
+fn cli_agent_is_on_path(agent: CLIAgent, path_env: Option<&str>) -> bool {
     match agent {
         CLIAgent::Unknown => false,
-        CLIAgent::CursorCli => is_on_path("cursor-agent"),
-        CLIAgent::DeepSeek => is_on_path("deepseek") || is_on_path("deepseek-tui"),
-        other => is_on_path(other.command_prefix()),
+        CLIAgent::CursorCli => is_on_path("cursor-agent", path_env),
+        CLIAgent::DeepSeek => {
+            is_on_path("deepseek", path_env) || is_on_path("deepseek-tui", path_env)
+        }
+        other => is_on_path(other.command_prefix(), path_env),
     }
 }
 
 /// 内联 PATH 搜索，零进程、零闪窗。
+/// 优先使用 `path_env`（来自交互式 login shell），回退到进程环境 PATH。
 #[cfg(unix)]
-fn is_on_path(cmd: &str) -> bool {
+fn is_on_path(cmd: &str, path_env: Option<&str>) -> bool {
+    if let Some(p) = path_env {
+        return std::env::split_paths(p).any(|dir| dir.join(cmd).is_file());
+    }
     let Ok(path_var) = std::env::var("PATH") else {
         return false;
     };
@@ -661,11 +682,12 @@ fn is_on_path(cmd: &str) -> bool {
 }
 
 #[cfg(windows)]
-fn is_on_path(cmd: &str) -> bool {
+fn is_on_path(cmd: &str, path_env: Option<&str>) -> bool {
     let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
-    let Ok(path_var) = std::env::var("PATH") else {
-        return false;
-    };
+    let path_var = path_env
+        .map(|p| p.to_string())
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
     let exts: Vec<&str> = pathext.split(';').collect();
     std::env::split_paths(&path_var).any(|dir| {
         exts.iter()
