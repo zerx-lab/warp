@@ -684,10 +684,13 @@ fn is_on_path(cmd: &str, path_env: Option<&str>) -> bool {
 #[cfg(windows)]
 fn is_on_path(cmd: &str, path_env: Option<&str>) -> bool {
     let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".into());
-    let path_var = path_env
-        .map(|p| p.to_string())
-        .or_else(|| std::env::var("PATH").ok())
-        .unwrap_or_default();
+    let path_var = match path_env {
+        Some(p) => p.to_string(),
+        None => match std::env::var("PATH") {
+            Ok(v) => v,
+            Err(_) => return false,
+        },
+    };
     let exts: Vec<&str> = pathext.split(';').collect();
     std::env::split_paths(&path_var).any(|dir| {
         exts.iter()
