@@ -385,7 +385,7 @@ sha2 = "0.10"
 shell-escape = "0.1.5"
 shellexpand = "3.1.1"
 warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "00a032b8ea0ee5711e2077e39a92dc9ca2051cd3", default-features = false }
-winit = { git = "https://github.com/warpdotdev/winit.git", rev = "7ef01853ae3fe952e6014080a88dc4352662dfb1" }
+winit = { git = "https://github.com/chenx-dust/winit.git", rev = "7ef914a440ad203da05355e6c3f8c482766987ec" }
 x11rb = "0.13.0"
 mockito = "1.7.0"
 sysinfo = { version = "0.37.0", default-features = false, features = [
