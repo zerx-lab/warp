@@ -425,14 +425,17 @@ impl LocalRepoMetadataModel {
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), RepoMetadataError> {
         if self.repositories.remove(repo_path).is_some() {
-            // Unregister from watcher
+            // Unregister from watcher, mirroring the guard in add_repository_internal:
+            // home directory and ancestors are never registered, so skip them here too.
             #[cfg(feature = "local_fs")]
             {
                 if let Some(ref watcher) = self.watcher {
                     if let Some(local_path) = repo_path.to_local_path() {
-                        watcher.update(ctx, |watcher, _ctx| {
-                            std::mem::drop(watcher.unregister_path(&local_path));
-                        });
+                        if !is_unsafe_watch_root(&local_path) {
+                            watcher.update(ctx, |watcher, _ctx| {
+                                std::mem::drop(watcher.unregister_path(&local_path));
+                            });
+                        }
                     }
                 }
             }
