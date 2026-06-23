@@ -383,31 +383,26 @@ impl LocalRepoMetadataModel {
             ));
         }
 
-        #[cfg(feature = "local_fs")]
-        if is_unsafe_watch_root(&local_path) {
-            return Err(RepoMetadataError::InvalidPath(format!(
-                "Refusing to register {} as a repository root: path is the home directory \
-                 or one of its ancestors, which would recursively watch unrelated user data",
-                local_path.display(),
-            )));
-        }
-
-        // Register this path with the watcher if we have one
+        // Register this path with the watcher if we have one. Skip the home
+        // directory and its ancestors to avoid recursively watching unrelated
+        // user data; those paths can still be listed in the file tree.
         #[cfg(feature = "local_fs")]
         {
             if let Some(ref watcher) = self.watcher {
-                let watch_path = local_path.clone();
-                watcher.update(ctx, |watcher, _ctx| {
-                    use crate::entry::should_ignore_git_path;
-                    let watch_filter = WatchFilter::with_filter(Arc::new(move |watch_path| {
-                        !should_ignore_git_path(watch_path)
-                    }));
-                    std::mem::drop(watcher.register_path(
-                        &watch_path,
-                        watch_filter,
-                        RecursiveMode::Recursive,
-                    ));
-                });
+                if !is_unsafe_watch_root(&local_path) {
+                    let watch_path = local_path.clone();
+                    watcher.update(ctx, |watcher, _ctx| {
+                        use crate::entry::should_ignore_git_path;
+                        let watch_filter = WatchFilter::with_filter(Arc::new(move |watch_path| {
+                            !should_ignore_git_path(watch_path)
+                        }));
+                        std::mem::drop(watcher.register_path(
+                            &watch_path,
+                            watch_filter,
+                            RecursiveMode::Recursive,
+                        ));
+                    });
+                }
             }
         }
 
