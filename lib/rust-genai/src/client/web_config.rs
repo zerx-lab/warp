@@ -24,6 +24,11 @@ pub struct WebConfig {
 	pub read_timeout: Option<Duration>,
 	pub default_headers: Option<reqwest::header::HeaderMap>,
 	pub proxy: Option<reqwest::Proxy>,
+	/// When true, disable automatic proxy discovery (system proxy, env vars).
+	/// Calls `reqwest::ClientBuilder::no_proxy()`. If an explicit `proxy` is
+	/// also set on this config, the explicit proxy still takes effect.
+	/// Default: false.
+	pub no_proxy: bool,
 	/// Enable gzip response decompression. **Default: false** (Zap fork
 	/// — upstream genai default is true). See struct-level docs for rationale.
 	pub gzip: bool,
@@ -39,6 +44,7 @@ impl Default for WebConfig {
 			read_timeout: None,
 			default_headers: None,
 			proxy: None,
+			no_proxy: false,
 			// Zap: gzip off by default — see struct-level docs above.
 			gzip: false,
 			tcp_nodelay: true,
@@ -129,6 +135,9 @@ impl WebConfig {
 		}
 		if let Some(ref headers) = self.default_headers {
 			builder = builder.default_headers(headers.clone());
+		}
+		if self.no_proxy {
+			builder = builder.no_proxy();
 		}
 		if let Some(ref proxy) = self.proxy {
 			builder = builder.proxy(proxy.clone());

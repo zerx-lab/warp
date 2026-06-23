@@ -2879,14 +2879,28 @@ pub(super) fn build_client(
         ..WebConfig::default()
     };
     let proxy_cfg = current_proxy_config();
-    if proxy_cfg.mode == http_client::ProxyMode::Custom && !proxy_cfg.url.is_empty() {
-        if let Err(err) = web_config.set_proxy_settings(
-            &proxy_cfg.url,
-            &proxy_cfg.username,
-            &proxy_cfg.password,
-            &proxy_cfg.no_proxy,
-        ) {
-            log::warn!("[byop] proxy URL '{}' 无效,跳过代理配置: {err}", proxy_cfg.url);
+    match proxy_cfg.mode {
+        http_client::ProxyMode::Off => {
+            // 完全禁用代理（含系统代理和环境变量），与
+            // http_client::Client::new() 的 Off 行为对齐。
+            web_config.no_proxy = true;
+        }
+        http_client::ProxyMode::System => {
+            // 跟随系统/环境变量代理（reqwest 默认行为）。
+            // WebConfig 不设 proxy → reqwest 读 macOS SystemConfiguration
+            // 或环境变量 HTTP_PROXY / HTTPS_PROXY。
+        }
+        http_client::ProxyMode::Custom => {
+            if !proxy_cfg.url.is_empty() {
+                if let Err(err) = web_config.set_proxy_settings(
+                    &proxy_cfg.url,
+                    &proxy_cfg.username,
+                    &proxy_cfg.password,
+                    &proxy_cfg.no_proxy,
+                ) {
+                    log::warn!("[byop] proxy URL '{}' 无效,跳过代理配置: {err}", proxy_cfg.url);
+                }
+            }
         }
     }
     Client::builder()
