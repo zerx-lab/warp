@@ -1522,7 +1522,7 @@ impl SshManagerPanel {
             )
             .with_child(chevron_el)
             .with_child(icon_el)
-            .with_child(label_or_editor)
+            .with_child(warpui::elements::Shrinkable::new(1.0, label_or_editor).finish())
             .with_main_axis_size(MainAxisSize::Max)
             .finish();
 
