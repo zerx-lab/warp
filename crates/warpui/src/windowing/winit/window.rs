@@ -1567,6 +1567,17 @@ fn create_window(
                     log::warn!("Couldn't retrieve system caption button bounds: {err:?}");
                 }
             };
+
+            // Re-apply the system backdrop type after post-creation setup. The initial
+            // with_system_backdrop(BackdropType::None) in WindowAttributes may not survive
+            // operations like set_cloaked/set_visible which can reset DWMWA_SYSTEMBACKDROP_TYPE
+            // to the Windows default (DWMSBT_AUTO), causing a light underpaint to show through
+            // transparent content when background_opacity is near zero. Fixes #273.
+            window.set_system_backdrop(if window_options.background_blur_texture {
+                BackdropType::TransientWindow
+            } else {
+                BackdropType::None
+            });
         }
     }
 
