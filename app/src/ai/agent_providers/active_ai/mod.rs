@@ -135,6 +135,7 @@ pub struct RenderedRequest {
 
 pub mod prompt_suggestions {
     use super::*;
+    use crate::settings::language::{Language, LanguageSettings};
     use warpui::{AppContext, EntityId};
 
     pub struct Input {
@@ -150,7 +151,12 @@ pub mod prompt_suggestions {
         input: Input,
     ) -> Option<RenderedRequest> {
         let cfg = resolve_active_ai_oneshot(app, terminal_view_id)?;
-        let system = render("prompt_suggestions_system.j2", context! {});
+        let language = match *LanguageSettings::as_ref(app).language {
+            Language::System | Language::English => "English",
+            Language::SimplifiedChinese => "Simplified Chinese",
+            Language::Japanese => "Japanese",
+        };
+        let system = render("prompt_suggestions_system.j2", context! { language => language });
         let user = render(
             "prompt_suggestions_user.j2",
             context! {
