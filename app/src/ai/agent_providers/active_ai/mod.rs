@@ -23,6 +23,8 @@ use super::oneshot::{
     OneshotConfig, OneshotOptions,
 };
 use crate::ai::predict::generate_am_query_suggestions::GenerateAMQuerySuggestionsResponse;
+use crate::settings::language::{Language, LanguageSettings};
+use warpui::SingletonEntity;
 
 pub mod parsing;
 
@@ -150,7 +152,21 @@ pub mod prompt_suggestions {
         input: Input,
     ) -> Option<RenderedRequest> {
         let cfg = resolve_active_ai_oneshot(app, terminal_view_id)?;
-        let system = render("prompt_suggestions_system.j2", context! {});
+        let language = *LanguageSettings::as_ref(app).language;
+        let language_str = match language {
+            Language::System => match crate::i18n::current_languages().first() {
+                Some(li) if li.language.as_str() == "zh" => "Simplified Chinese".to_string(),
+                Some(li) if li.language.as_str() == "ja" => "Japanese".to_string(),
+                Some(li) if li.language.as_str() == "en" => "English".to_string(),
+                _ => "English".to_string(),
+            },
+            Language::English => "English".to_string(),
+            Language::SimplifiedChinese => "Simplified Chinese".to_string(),
+            Language::Japanese => "Japanese".to_string(),
+        };
+        let system = render("prompt_suggestions_system.j2", context! {
+            language => language_str,
+        });
         let user = render(
             "prompt_suggestions_user.j2",
             context! {
@@ -445,5 +461,47 @@ pub mod next_command {
             log::warn!("[active_ai] next_command sanitize REJECTED raw response");
         }
         sanitized
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_suggestions_renders_language_directive() {
+        // Verify that the template renders the explicit language directive
+        // for each supported UI language. The Rust code maps Language::System
+        // to one of these three strings; anything else falls back to English.
+        let cases = [
+            ("English", "Respond in English."),
+            ("Simplified Chinese", "Respond in Simplified Chinese."),
+            ("Japanese", "Respond in Japanese."),
+        ];
+
+        for (input_lang, expected_directive) in &cases {
+            let rendered = render("prompt_suggestions_system.j2", context! {
+                language => input_lang,
+            });
+            assert!(
+                rendered.contains(expected_directive),
+                "Expected '{}' in rendered prompt for language '{}', but got:\n{}",
+                expected_directive,
+                input_lang,
+                rendered
+            );
+        }
+    }
+
+    #[test]
+    fn prompt_suggestions_has_no_chinese_examples() {
+        let rendered = render("prompt_suggestions_system.j2", context! {
+            language => "English",
+        });
+        assert!(
+            !rendered.contains("查看") && !rendered.contains("解决") && !rendered.contains("修复"),
+            "Prompt should not contain Chinese example text, but got:\n{}",
+            rendered
+        );
     }
 }
