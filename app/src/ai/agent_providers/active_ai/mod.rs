@@ -152,9 +152,25 @@ pub mod prompt_suggestions {
     ) -> Option<RenderedRequest> {
         let cfg = resolve_active_ai_oneshot(app, terminal_view_id)?;
         let language = match *LanguageSettings::as_ref(app).language {
-            Language::System | Language::English => "English",
+            Language::English => "English",
             Language::SimplifiedChinese => "Simplified Chinese",
             Language::Japanese => "Japanese",
+            // Language::System follows the OS locale; resolve via the active i18n loader
+            // so Chinese/Japanese system-locale users still get CJK suggestions.
+            Language::System => {
+                let locale = crate::i18n::current_languages()
+                    .into_iter()
+                    .next()
+                    .map(|l| l.to_string())
+                    .unwrap_or_default();
+                if locale.starts_with("zh") {
+                    "Simplified Chinese"
+                } else if locale.starts_with("ja") {
+                    "Japanese"
+                } else {
+                    "English"
+                }
+            }
         };
         let system = render("prompt_suggestions_system.j2", context! { language => language });
         let user = render(
