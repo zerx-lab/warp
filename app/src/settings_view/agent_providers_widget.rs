@@ -1463,7 +1463,7 @@ impl AgentProvidersWidget {
         match models_dev::cached() {
             None => {
                 let text = if models_dev::last_fetch_failed() {
-                    crate::t!("settings-agent-providers-catalog-empty")
+                    crate::t!("settings-agent-providers-catalog-fetch-failed")
                 } else {
                     crate::t!("settings-agent-providers-loading-catalog")
                 };
