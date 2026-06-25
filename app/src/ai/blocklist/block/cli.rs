@@ -9,9 +9,10 @@ use warp_core::report_error;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
-    ClippedScrollStateHandle, ConstrainedBox, Empty, Fill, FormattedTextElement, Highlight,
-    HighlightedHyperlink, Hoverable, MainAxisAlignment, MainAxisSize, NewScrollable, SavePosition,
-    SelectableArea, SizeConstraintCondition, SizeConstraintSwitch,
+    resizable_state_handle, ClippedScrollStateHandle, ConstrainedBox, DragBarSide, Empty, Fill,
+    FormattedTextElement, Highlight, HighlightedHyperlink, Hoverable, MainAxisAlignment,
+    MainAxisSize, NewScrollable, Resizable, ResizableStateHandle, SavePosition, SelectableArea,
+    SizeConstraintCondition, SizeConstraintSwitch,
 };
 use warpui::fonts::Weight;
 use warpui::platform::{Cursor, OperatingSystem};
@@ -116,10 +117,30 @@ use super::{
 };
 const MENU_WIDTH: f32 = 200.0;
 const MAX_HEIGHT: f32 = 320.0;
+// CLI agent 浮窗的最小宽度，避免内容被拖到不可读。
+const MIN_RESIZABLE_WIDTH: f32 = 360.0;
+// CLI agent 浮窗的最小高度，保留一行以上内容和拖拽命中区域。
+const MIN_RESIZABLE_HEIGHT: f32 = 40.0;
+// 横向缩放时给窗口边缘保留的少量可见宽度。
+const MIN_REMAINING_WINDOW_WIDTH: f32 = 16.0;
+// 纵向缩放时给窗口边缘保留的少量可见高度。
+const MIN_REMAINING_WINDOW_HEIGHT: f32 = 16.0;
 const AVATAR_RIGHT_MARGIN: f32 = 8.;
 const CONTENT_PADDING: f32 = 12.;
 const ALLOW_ACTION_POSITION_ID: &str = "allow-action-position-id";
 const USER_QUERY_POSITION_ID: &str = "cli-subagent-user-query-position-id";
+
+fn cli_subagent_width_bounds(window_width: f32) -> (f32, f32) {
+    // 最大宽度接近整窗，允许右下角浮窗向左覆盖大部分终端区域。
+    let max = (window_width - MIN_REMAINING_WINDOW_WIDTH).max(MIN_RESIZABLE_WIDTH);
+    (MIN_RESIZABLE_WIDTH, max)
+}
+
+fn cli_subagent_height_bounds(window_height: f32) -> (f32, f32) {
+    // 最大高度接近整窗，允许右下角浮窗向上覆盖大部分终端区域。
+    let max = (window_height - MIN_REMAINING_WINDOW_HEIGHT).max(MIN_RESIZABLE_HEIGHT);
+    (MIN_RESIZABLE_HEIGHT, max)
+}
 
 lazy_static! {
     static ref ACCEPT_KEYSTROKE: Keystroke = Keystroke {
@@ -233,6 +254,10 @@ pub struct CLISubagentView {
 
     is_input_dismissed: bool,
     input_dismiss_timer_handle: Option<SpawnedFutureHandle>,
+    // 用户拖拽后的浮窗宽度，交给 Resizable 在多次 render 间保持。
+    resizable_width: ResizableStateHandle,
+    // 用户拖拽后的浮窗高度，同时作为内部滚动区域的 max height。
+    resizable_height: ResizableStateHandle,
 
     current_working_directory: Option<String>,
     shell_launch_data: Option<ShellLaunchData>,
@@ -507,6 +532,8 @@ impl CLISubagentView {
             always_allow_read_files_checked,
             is_input_dismissed: false,
             input_dismiss_timer_handle: None,
+            resizable_width: resizable_state_handle(MIN_RESIZABLE_WIDTH),
+            resizable_height: resizable_state_handle(MAX_HEIGHT),
             current_working_directory,
             shell_launch_data,
             selected_text: Arc::new(RwLock::new(None)),
@@ -1002,6 +1029,11 @@ impl View for CLISubagentView {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let semantic_selection = SemanticSelection::handle(app).as_ref(app);
+        let resizable_height = self
+            .resizable_height
+            .lock()
+            .map(|state| state.size())
+            .unwrap_or(MAX_HEIGHT);
 
         let mut result = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
@@ -1063,6 +1095,7 @@ impl View for CLISubagentView {
                         child: selectable_text.finish(),
                         background_color: internal_colors::accent_bg(theme).into(),
                         border: Some(Border::all(1.).with_border_fill(theme.accent())),
+                        max_height: resizable_height,
                     },
                     app,
                 )
@@ -1176,6 +1209,7 @@ impl View for CLISubagentView {
                                             border: Some(Border::all(1.).with_border_fill(
                                                 internal_colors::neutral_3(theme),
                                             )),
+                                            max_height: resizable_height,
                                         },
                                         app,
                                     )
@@ -1203,6 +1237,7 @@ impl View for CLISubagentView {
                                                 internal_colors::neutral_3(theme),
                                             ),
                                         ),
+                                        max_height: resizable_height,
                                     },
                                     app,
                                 )
@@ -1308,6 +1343,7 @@ impl View for CLISubagentView {
                         child: output.finish(),
                         background_color: internal_colors::neutral_2(appearance.theme()),
                         border: Some(output_border),
+                        max_height: resizable_height,
                     },
                     app,
                 )
@@ -1327,6 +1363,7 @@ impl View for CLISubagentView {
                                 input: input.clone(),
                                 mode,
                                 scroll_state: self.state_handles.input_scroll_state.clone(),
+                                max_height: resizable_height,
                             },
                             app,
                         )),
@@ -1429,7 +1466,23 @@ impl View for CLISubagentView {
             );
         }
 
-        result.finish()
+        let content = result.finish();
+        let width_resizable = Resizable::new(self.resizable_width.clone(), content)
+            .with_dragbar_side(DragBarSide::Left)
+            .on_resize(|ctx, _| ctx.notify())
+            .with_bounds_callback(Box::new(|window_size| {
+                cli_subagent_width_bounds(window_size.x())
+            }))
+            .finish();
+
+        // 外层负责纵向缩放，内层负责横向缩放；拖拽边放在左上两侧，贴合右下角浮窗形态。
+        Resizable::new(self.resizable_height.clone(), width_resizable)
+            .with_dragbar_side(DragBarSide::Top)
+            .on_resize(|ctx, _| ctx.notify())
+            .with_bounds_callback(Box::new(|window_size| {
+                cli_subagent_height_bounds(window_size.y())
+            }))
+            .finish()
     }
 
     fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {
@@ -1741,6 +1794,8 @@ struct ScrollableContainerProps {
     child: Box<dyn Element>,
     background_color: ColorU,
     border: Option<Border>,
+    // 当前浮窗高度，用来限制每个可滚动内容块的最大高度。
+    max_height: f32,
 }
 
 fn render_scrollable_container(props: ScrollableContainerProps, _app: &AppContext) -> Container {
@@ -1749,6 +1804,7 @@ fn render_scrollable_container(props: ScrollableContainerProps, _app: &AppContex
         child,
         background_color,
         border,
+        max_height,
     } = props;
 
     let scrollable = NewScrollable::vertical(
@@ -1764,7 +1820,7 @@ fn render_scrollable_container(props: ScrollableContainerProps, _app: &AppContex
     .finish();
 
     let clipped = ConstrainedBox::new(scrollable)
-        .with_max_height(MAX_HEIGHT)
+        .with_max_height(max_height)
         .finish();
 
     let mut container = Container::new(clipped)
@@ -1949,6 +2005,8 @@ struct WriteToPtyInputProps {
     input: bytes::Bytes,
     mode: AIAgentPtyWriteMode,
     scroll_state: ClippedScrollStateHandle,
+    // 写入命令预览也跟随浮窗高度缩放，避免外层变矮后内部仍占用旧高度。
+    max_height: f32,
 }
 
 fn render_write_to_pty_input(props: WriteToPtyInputProps, app: &AppContext) -> Box<dyn Element> {
@@ -1956,6 +2014,7 @@ fn render_write_to_pty_input(props: WriteToPtyInputProps, app: &AppContext) -> B
         input,
         mode,
         scroll_state,
+        max_height,
     } = props;
 
     let appearance = Appearance::as_ref(app);
@@ -2001,7 +2060,7 @@ fn render_write_to_pty_input(props: WriteToPtyInputProps, app: &AppContext) -> B
     .finish();
 
     let clipped = ConstrainedBox::new(scrollable)
-        .with_max_height(MAX_HEIGHT)
+        .with_max_height(max_height)
         .finish();
 
     Container::new(clipped)
@@ -2176,4 +2235,29 @@ fn render_blocked_action(props: BlockedActionProps<'_>, app: &AppContext) -> Box
             .finish(),
     )
     .finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_subagent_resize_width_bounds_allow_nearly_full_window() {
+        assert_eq!(cli_subagent_width_bounds(1000.0), (360.0, 984.0));
+    }
+
+    #[test]
+    fn cli_subagent_resize_width_bounds_do_not_drop_below_panel_minimum() {
+        assert_eq!(cli_subagent_width_bounds(320.0), (360.0, 360.0));
+    }
+
+    #[test]
+    fn cli_subagent_resize_height_bounds_allow_nearly_full_window() {
+        assert_eq!(cli_subagent_height_bounds(700.0), (40.0, 684.0));
+    }
+
+    #[test]
+    fn cli_subagent_resize_height_bounds_do_not_drop_below_panel_minimum() {
+        assert_eq!(cli_subagent_height_bounds(50.0), (40.0, 40.0));
+    }
 }

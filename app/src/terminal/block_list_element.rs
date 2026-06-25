@@ -185,6 +185,31 @@ const SPACE_BETWEEN_SELECTED_BLOCK_AVATARS: f32 = 2.;
 
 const CLI_SUBAGENT_HORIZONTAL_MARGIN: f32 = 8.;
 const CLI_SUBAGENT_VERTICAL_MARGIN: f32 = 8.;
+// CLI agent 浮窗在普通 block list 中最多接近铺满终端区域，保留少量边缘余量。
+const CLI_SUBAGENT_MAX_WIDTH_RATIO: f32 = 0.98;
+// 高度同样接近整窗，但仍受当前 block 可用高度限制。
+const CLI_SUBAGENT_MAX_HEIGHT_RATIO: f32 = 0.98;
+
+fn cli_subagent_layout_max_size(
+    available_size: Vector2F,
+    block_height: f32,
+    is_agent_blocked: bool,
+) -> Vector2F {
+    // 参考 Warp 的外层约束形态：由 block list 先给浮窗足够大的布局上限，
+    // 再交给 CLISubagentView 内部 Resizable 处理最终拖拽尺寸。
+    let max_width = (available_size.x() * CLI_SUBAGENT_MAX_WIDTH_RATIO
+        - CLI_SUBAGENT_HORIZONTAL_MARGIN)
+        .max(0.);
+    let window_max_height = available_size.y() * CLI_SUBAGENT_MAX_HEIGHT_RATIO;
+    let max_height = if is_agent_blocked {
+        window_max_height
+    } else {
+        // 非 blocked 状态保持 Warp 的 block 内约束，避免非活跃浮窗越出所属 block。
+        (block_height - CLI_SUBAGENT_VERTICAL_MARGIN * 2.).min(window_max_height)
+    }
+    .max(0.);
+    vec2f(max_width, max_height)
+}
 
 pub type LabelBuilderFn = dyn Fn(
     Vec<BlockIndex>,
@@ -3358,10 +3383,10 @@ impl Element for BlockListElement {
                                 cli_subagent_view.layout(
                                     SizeConstraint {
                                         min: vec2f(0., 0.),
-                                        max: vec2f(
-                                            constraint.max.x() * 0.4
-                                                - CLI_SUBAGENT_HORIZONTAL_MARGIN,
-                                            block_height - CLI_SUBAGENT_VERTICAL_MARGIN * 2.,
+                                        max: cli_subagent_layout_max_size(
+                                            constraint.max,
+                                            block_height,
+                                            block.is_agent_blocked(),
                                         ),
                                     },
                                     ctx,
@@ -4845,4 +4870,41 @@ where
     }
 
     button.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_subagent_layout_max_size_allows_nearly_full_block_list_width() {
+        assert_eq!(
+            cli_subagent_layout_max_size(vec2f(1000., 700.), 900., true),
+            vec2f(972., 686.)
+        );
+    }
+
+    #[test]
+    fn cli_subagent_layout_max_size_allows_nearly_full_height_when_agent_blocked() {
+        assert_eq!(
+            cli_subagent_layout_max_size(vec2f(1000., 700.), 300., true),
+            vec2f(972., 686.)
+        );
+    }
+
+    #[test]
+    fn cli_subagent_layout_max_size_keeps_block_height_limit_when_not_agent_blocked() {
+        assert_eq!(
+            cli_subagent_layout_max_size(vec2f(1000., 700.), 300., false),
+            vec2f(972., 284.)
+        );
+    }
+
+    #[test]
+    fn cli_subagent_layout_max_size_does_not_go_negative() {
+        assert_eq!(
+            cli_subagent_layout_max_size(vec2f(4., 4.), 10., false),
+            vec2f(0., 0.)
+        );
+    }
 }
