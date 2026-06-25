@@ -117,6 +117,8 @@ struct State {
     catalog: Option<Catalog>,
     /// 缓存最后修改时间(用于判断是否过期)。
     loaded_at: Option<SystemTime>,
+    /// 最近一次网络拉取是否失败。用于区分「正在加载」与「已失败」，驱动 UI 显示错误态。
+    last_fetch_failed: bool,
 }
 
 fn state() -> &'static RwLock<State> {
@@ -134,6 +136,19 @@ fn cache_path() -> PathBuf {
 /// 没数据返回 `None`,UI 应展示 "正在拉取" / 重试按钮。
 pub fn cached() -> Option<Catalog> {
     state().read().ok().and_then(|s| s.catalog.clone())
+}
+
+/// 最近一次网络拉取是否失败(catalog 仍为 None 且拉取已完成但出错)。
+/// UI 用于区分「正在加载」与「已失败」。
+pub fn last_fetch_failed() -> bool {
+    state().read().ok().map(|s| s.last_fetch_failed).unwrap_or(false)
+}
+
+/// 标记最近一次拉取失败。由 action handler 在 Err 分支调用。
+pub fn mark_fetch_failed() {
+    if let Ok(mut s) = state().write() {
+        s.last_fetch_failed = true;
+    }
 }
 
 /// 一个模型从 models.dev 抽出的能力快照,用于 BYOP UI / chat_stream 决策附件类型。
@@ -253,6 +268,7 @@ pub async fn fetch_and_cache(client: Client) -> Result<(), String> {
     if let Ok(mut s) = state().write() {
         s.catalog = Some(catalog);
         s.loaded_at = Some(SystemTime::now());
+        s.last_fetch_failed = false;
     }
     Ok(())
 }
