@@ -167,6 +167,11 @@ fn cli_subagent_mark_conversation_scroll_should_follow_latest(is_pinned: &mut bo
     *is_pinned = true;
 }
 
+/// 浮窗内滚轮事件只消费在整体对话窗口中，避免继续带动外层终端滚动。
+fn cli_subagent_conversation_scroll_wheel_dispatch_result() -> DispatchEventResult {
+    DispatchEventResult::StopPropagation
+}
+
 lazy_static! {
     static ref ACCEPT_KEYSTROKE: Keystroke = Keystroke {
         key: "enter".to_owned(),
@@ -1646,7 +1651,7 @@ impl View for CLISubagentView {
             .with_always_handle()
             .on_scroll_wheel(|ctx, _app, _, _| {
                 ctx.dispatch_typed_action(CLISubagentAction::ConversationScrollManuallyMoved);
-                DispatchEventResult::PropagateToParent
+                cli_subagent_conversation_scroll_wheel_dispatch_result()
             })
             .finish();
         let width_resizable = Resizable::new(self.resizable_width.clone(), content)
@@ -2456,5 +2461,13 @@ mod tests {
         cli_subagent_mark_conversation_scroll_should_follow_latest(&mut is_pinned);
 
         assert!(is_pinned);
+    }
+
+    #[test]
+    fn cli_subagent_conversation_scroll_wheel_stops_parent_propagation() {
+        assert!(matches!(
+            cli_subagent_conversation_scroll_wheel_dispatch_result(),
+            DispatchEventResult::StopPropagation
+        ));
     }
 }
