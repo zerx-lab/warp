@@ -9,10 +9,11 @@ use warp_core::report_error;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
-    resizable_state_handle, ClippedScrollStateHandle, ConstrainedBox, DragBarSide, Empty, Fill,
-    FormattedTextElement, Highlight, HighlightedHyperlink, Hoverable, MainAxisAlignment,
-    MainAxisSize, NewScrollable, Resizable, ResizableStateHandle, SavePosition, SelectableArea,
-    SizeConstraintCondition, SizeConstraintSwitch,
+    resizable_state_handle, ClippedScrollStateHandle, ConstrainedBox, DispatchEventResult,
+    DragBarSide, Empty, EventHandler, Fill, FormattedTextElement, Highlight, HighlightedHyperlink,
+    Hoverable, MainAxisAlignment, MainAxisSize, NewScrollable, Resizable, ResizableStateHandle,
+    SavePosition, ScrollTarget, ScrollToPositionMode, SelectableArea, SizeConstraintCondition,
+    SizeConstraintSwitch,
 };
 use warpui::fonts::Weight;
 use warpui::platform::{Cursor, OperatingSystem};
@@ -129,6 +130,7 @@ const AVATAR_RIGHT_MARGIN: f32 = 8.;
 const CONTENT_PADDING: f32 = 12.;
 const ALLOW_ACTION_POSITION_ID: &str = "allow-action-position-id";
 const USER_QUERY_POSITION_ID: &str = "cli-subagent-user-query-position-id";
+const CONVERSATION_SCROLL_BOTTOM_POSITION_ID: &str = "cli-subagent-conversation-bottom-position-id";
 
 fn cli_subagent_width_bounds(window_width: f32) -> (f32, f32) {
     // 最大宽度接近整窗，允许右下角浮窗向左覆盖大部分终端区域。
@@ -153,6 +155,16 @@ fn cli_subagent_append_history_exchange_id(
 
     exchange_ids.push(exchange_id);
     true
+}
+
+/// 用户滚轮查看历史后，不再强制把整体对话滚回底部。
+fn cli_subagent_mark_conversation_scroll_manually_moved(is_pinned: &mut bool) {
+    *is_pinned = false;
+}
+
+/// 新一轮 exchange 追加时，默认恢复跟随最新内容。
+fn cli_subagent_mark_conversation_scroll_should_follow_latest(is_pinned: &mut bool) {
+    *is_pinned = true;
 }
 
 lazy_static! {
@@ -230,10 +242,7 @@ struct StateHandles {
     action_selection_handle: SelectionHandle,
     speedbump_checkbox_handle: MouseStateHandle,
     ai_settings_link: HighlightedHyperlink,
-    output_scroll_state: ClippedScrollStateHandle,
-    action_scroll_state: ClippedScrollStateHandle,
-    input_scroll_state: ClippedScrollStateHandle,
-    query_scroll_state: ClippedScrollStateHandle,
+    conversation_scroll_state: ClippedScrollStateHandle,
     input_hover_state: MouseStateHandle,
     dismiss_input_mouse_state: MouseStateHandle,
 }
@@ -268,6 +277,8 @@ pub struct CLISubagentView {
     is_allow_menu_open: bool,
     always_allow_write_to_pty_checked: bool,
     always_allow_read_files_checked: bool,
+    // 整体对话滚动是否仍跟随最新输出；用户手动滚轮查看历史后会关闭。
+    is_conversation_scroll_pinned_to_bottom: bool,
 
     is_input_dismissed: bool,
     input_dismiss_timer_handle: Option<SpawnedFutureHandle>,
@@ -428,6 +439,9 @@ impl CLISubagentView {
                                 Rc::new(model);
                             me.append_history_model(appended_exchange_id, model.clone());
                             me.model = model;
+                            cli_subagent_mark_conversation_scroll_should_follow_latest(
+                                &mut me.is_conversation_scroll_pinned_to_bottom,
+                            );
                             me.code_editor_views = Default::default();
                             me.code_editor_buttons = Default::default();
                             me.table_section_handles = Default::default();
@@ -591,6 +605,7 @@ impl CLISubagentView {
             is_allow_menu_open: false,
             always_allow_write_to_pty_checked,
             always_allow_read_files_checked,
+            is_conversation_scroll_pinned_to_bottom: true,
             is_input_dismissed: false,
             input_dismiss_timer_handle: None,
             resizable_width: resizable_state_handle(MIN_RESIZABLE_WIDTH),
@@ -1144,7 +1159,7 @@ impl View for CLISubagentView {
             .map(|state| state.size())
             .unwrap_or(MAX_HEIGHT);
 
-        let mut result = Flex::column()
+        let mut conversation_items = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
@@ -1214,22 +1229,17 @@ impl View for CLISubagentView {
                         selectable_text = selectable_text.should_support_rect_select();
                     }
 
-                    let scrollable_container = render_scrollable_container(
-                        ScrollableContainerProps {
-                            scroll_state: self.state_handles.query_scroll_state.clone(),
-                            child: selectable_text.finish(),
-                            background_color: internal_colors::accent_bg(theme).into(),
-                            border: Some(Border::all(1.).with_border_fill(theme.accent())),
-                            max_height: resizable_height,
-                        },
-                        app,
-                    )
+                    let query_container = render_framed_container(FramedContainerProps {
+                        child: selectable_text.finish(),
+                        background_color: internal_colors::accent_bg(theme).into(),
+                        border: Some(Border::all(1.).with_border_fill(theme.accent())),
+                    })
                     .with_margin_bottom(8.)
                     .finish();
 
                     let dismissable_stack = render_dismissable_container(
                         DismissableContainerProps {
-                            child: scrollable_container,
+                            child: query_container,
                             hover_state: self.state_handles.input_hover_state.clone(),
                             dismiss_mouse_state: self
                                 .state_handles
@@ -1241,7 +1251,7 @@ impl View for CLISubagentView {
                     );
 
                     if !self.is_input_dismissed {
-                        result.add_child(dismissable_stack);
+                        conversation_items.add_child(dismissable_stack);
                     }
                 }
             }
@@ -1343,24 +1353,16 @@ impl View for CLISubagentView {
                                 if let Some(rendered_action) =
                                     render_action(action.action.clone(), app)
                                 {
-                                    result.add_child(
-                                        render_scrollable_container(
-                                            ScrollableContainerProps {
-                                                scroll_state: self
-                                                    .state_handles
-                                                    .action_scroll_state
-                                                    .clone(),
-                                                child: rendered_action,
-                                                background_color: internal_colors::neutral_2(
-                                                    appearance.theme(),
-                                                ),
-                                                border: Some(Border::all(1.).with_border_fill(
-                                                    internal_colors::neutral_3(theme),
-                                                )),
-                                                max_height: resizable_height,
-                                            },
-                                            app,
-                                        )
+                                    conversation_items.add_child(
+                                        render_framed_container(FramedContainerProps {
+                                            child: rendered_action,
+                                            background_color: internal_colors::neutral_2(
+                                                appearance.theme(),
+                                            ),
+                                            border: Some(Border::all(1.).with_border_fill(
+                                                internal_colors::neutral_3(theme),
+                                            )),
+                                        })
                                         .with_margin_bottom(8.)
                                         .finish(),
                                     );
@@ -1371,24 +1373,18 @@ impl View for CLISubagentView {
                             query,
                         }) => {
                             if is_latest_model && !should_hide_responses {
-                                result.add_child(
-                                    render_scrollable_container(
-                                        ScrollableContainerProps {
-                                            scroll_state: self
-                                                .state_handles
-                                                .action_scroll_state
-                                                .clone(),
-                                            child: render_web_search(query.clone(), app),
-                                            background_color: internal_colors::neutral_2(
-                                                appearance.theme(),
-                                            ),
-                                            border: Some(Border::all(1.).with_border_fill(
+                                conversation_items.add_child(
+                                    render_framed_container(FramedContainerProps {
+                                        child: render_web_search(query.clone(), app),
+                                        background_color: internal_colors::neutral_2(
+                                            appearance.theme(),
+                                        ),
+                                        border: Some(
+                                            Border::all(1.).with_border_fill(
                                                 internal_colors::neutral_3(theme),
-                                            )),
-                                            max_height: resizable_height,
-                                        },
-                                        app,
-                                    )
+                                            ),
+                                        ),
+                                    })
                                     .with_margin_bottom(8.)
                                     .finish(),
                                 );
@@ -1485,17 +1481,12 @@ impl View for CLISubagentView {
                     output = output.should_support_rect_select();
                 }
 
-                result.add_child(
-                    render_scrollable_container(
-                        ScrollableContainerProps {
-                            scroll_state: self.state_handles.output_scroll_state.clone(),
-                            child: output.finish(),
-                            background_color: internal_colors::neutral_2(appearance.theme()),
-                            border: Some(output_border),
-                            max_height: resizable_height,
-                        },
-                        app,
-                    )
+                conversation_items.add_child(
+                    render_framed_container(FramedContainerProps {
+                        child: output.finish(),
+                        background_color: internal_colors::neutral_2(appearance.theme()),
+                        border: Some(output_border),
+                    })
                     .with_margin_bottom(8.)
                     .finish(),
                 );
@@ -1511,8 +1502,6 @@ impl View for CLISubagentView {
                                 WriteToPtyInputProps {
                                     input: input.clone(),
                                     mode,
-                                    scroll_state: self.state_handles.input_scroll_state.clone(),
-                                    max_height: resizable_height,
                                 },
                                 app,
                             )),
@@ -1609,7 +1598,7 @@ impl View for CLISubagentView {
                     selectable_action = selectable_action.should_support_rect_select();
                 }
 
-                result.add_child(
+                conversation_items.add_child(
                     Container::new(selectable_action.finish())
                         .with_margin_bottom(8.)
                         .finish(),
@@ -1617,7 +1606,49 @@ impl View for CLISubagentView {
             }
         }
 
-        let content = result.finish();
+        let bottom_position_id =
+            format!("{CONVERSATION_SCROLL_BOTTOM_POSITION_ID}-{}", self.block_id);
+        conversation_items.add_child(
+            SavePosition::new(
+                ConstrainedBox::new(Empty::new().finish())
+                    .with_height(1.)
+                    .finish(),
+                &bottom_position_id,
+            )
+            .finish(),
+        );
+
+        if self.is_conversation_scroll_pinned_to_bottom {
+            self.state_handles
+                .conversation_scroll_state
+                .scroll_to_position(ScrollTarget {
+                    position_id: bottom_position_id,
+                    mode: ScrollToPositionMode::FullyIntoView,
+                });
+        }
+
+        let scrollable_content = NewScrollable::vertical(
+            SingleAxisConfig::Clipped {
+                handle: self.state_handles.conversation_scroll_state.clone(),
+                child: conversation_items.finish(),
+            },
+            Fill::None,
+            Fill::None,
+            Fill::None,
+        )
+        .with_propagate_mousewheel_if_not_handled(true)
+        .finish();
+
+        let clipped_content = ConstrainedBox::new(scrollable_content)
+            .with_max_height(resizable_height)
+            .finish();
+        let content = EventHandler::new(clipped_content)
+            .with_always_handle()
+            .on_scroll_wheel(|ctx, _app, _, _| {
+                ctx.dispatch_typed_action(CLISubagentAction::ConversationScrollManuallyMoved);
+                DispatchEventResult::PropagateToParent
+            })
+            .finish();
         let width_resizable = Resizable::new(self.resizable_width.clone(), content)
             .with_dragbar_side(DragBarSide::Left)
             .on_resize(|ctx, _| ctx.notify())
@@ -1669,6 +1700,7 @@ pub enum CLISubagentAction {
     CopyOnSelect(String),
     CopyDebugId(String),
     OpenFeedbackDocs,
+    ConversationScrollManuallyMoved,
 }
 
 impl TypedActionView for CLISubagentView {
@@ -1764,6 +1796,12 @@ impl TypedActionView for CLISubagentView {
             }
             CLISubagentAction::OpenFeedbackDocs => {
                 ctx.open_url("");
+            }
+            CLISubagentAction::ConversationScrollManuallyMoved => {
+                cli_subagent_mark_conversation_scroll_manually_moved(
+                    &mut self.is_conversation_scroll_pinned_to_bottom,
+                );
+                ctx.notify();
             }
         }
     }
@@ -1940,41 +1978,20 @@ fn render_dismissable_container(
         .with_hover_out_delay(Duration::from_millis(500))
         .finish()
 }
-struct ScrollableContainerProps {
-    scroll_state: ClippedScrollStateHandle,
+struct FramedContainerProps {
     child: Box<dyn Element>,
     background_color: ColorU,
     border: Option<Border>,
-    // 当前浮窗高度，用来限制每个可滚动内容块的最大高度。
-    max_height: f32,
 }
 
-fn render_scrollable_container(props: ScrollableContainerProps, _app: &AppContext) -> Container {
-    let ScrollableContainerProps {
-        scroll_state,
+fn render_framed_container(props: FramedContainerProps) -> Container {
+    let FramedContainerProps {
         child,
         background_color,
         border,
-        max_height,
     } = props;
 
-    let scrollable = NewScrollable::vertical(
-        SingleAxisConfig::Clipped {
-            handle: scroll_state,
-            child,
-        },
-        Fill::None,
-        Fill::None,
-        Fill::None,
-    )
-    .with_propagate_mousewheel_if_not_handled(true)
-    .finish();
-
-    let clipped = ConstrainedBox::new(scrollable)
-        .with_max_height(max_height)
-        .finish();
-
-    let mut container = Container::new(clipped)
+    let mut container = Container::new(child)
         .with_background_color(background_color)
         .with_horizontal_padding(CONTENT_PADDING)
         .with_vertical_padding(CONTENT_PADDING)
@@ -2155,18 +2172,10 @@ fn get_blocked_action_header(action: AIAgentActionType) -> Option<String> {
 struct WriteToPtyInputProps {
     input: bytes::Bytes,
     mode: AIAgentPtyWriteMode,
-    scroll_state: ClippedScrollStateHandle,
-    // 写入命令预览也跟随浮窗高度缩放，避免外层变矮后内部仍占用旧高度。
-    max_height: f32,
 }
 
 fn render_write_to_pty_input(props: WriteToPtyInputProps, app: &AppContext) -> Box<dyn Element> {
-    let WriteToPtyInputProps {
-        input,
-        mode,
-        scroll_state,
-        max_height,
-    } = props;
+    let WriteToPtyInputProps { input, mode } = props;
 
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
@@ -2198,23 +2207,7 @@ fn render_write_to_pty_input(props: WriteToPtyInputProps, app: &AppContext) -> B
     )
     .finish();
 
-    let scrollable = NewScrollable::vertical(
-        SingleAxisConfig::Clipped {
-            handle: scroll_state,
-            child: text,
-        },
-        Fill::None,
-        Fill::None,
-        Fill::None,
-    )
-    .with_propagate_mousewheel_if_not_handled(true)
-    .finish();
-
-    let clipped = ConstrainedBox::new(scrollable)
-        .with_max_height(max_height)
-        .finish();
-
-    Container::new(clipped)
+    Container::new(text)
         .with_background_color(internal_colors::neutral_2(theme))
         .with_horizontal_padding(CONTENT_PADDING)
         .with_vertical_padding(8.)
@@ -2445,5 +2438,23 @@ mod tests {
         ));
 
         assert_eq!(exchange_ids, vec![exchange_id]);
+    }
+
+    #[test]
+    fn cli_subagent_conversation_scroll_unpins_after_manual_scroll() {
+        let mut is_pinned = true;
+
+        cli_subagent_mark_conversation_scroll_manually_moved(&mut is_pinned);
+
+        assert!(!is_pinned);
+    }
+
+    #[test]
+    fn cli_subagent_conversation_scroll_pins_after_new_exchange() {
+        let mut is_pinned = false;
+
+        cli_subagent_mark_conversation_scroll_should_follow_latest(&mut is_pinned);
+
+        assert!(is_pinned);
     }
 }
