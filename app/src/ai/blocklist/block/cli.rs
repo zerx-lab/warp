@@ -67,9 +67,9 @@ use crate::ToastStack;
 use crate::{
     ai::{
         agent::{
-            conversation::AIConversationId, task::TaskId, AIAgentActionType, AIAgentOutput,
-            AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, ProgrammingLanguage,
-            WebSearchStatus,
+            conversation::AIConversationId, task::TaskId, AIAgentActionType, AIAgentExchangeId,
+            AIAgentOutput, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection,
+            ProgrammingLanguage, WebSearchStatus,
         },
         blocklist::{
             code_block::CodeSnippetButtonHandles, BlocklistAIActionModel, BlocklistAIHistoryEvent,
@@ -140,6 +140,19 @@ fn cli_subagent_height_bounds(window_height: f32) -> (f32, f32) {
     // 最大高度接近整窗，允许右下角浮窗向上覆盖大部分终端区域。
     let max = (window_height - MIN_REMAINING_WINDOW_HEIGHT).max(MIN_RESIZABLE_HEIGHT);
     (MIN_RESIZABLE_HEIGHT, max)
+}
+
+/// 追加 CLI agent 浮窗历史 exchange id，并忽略重复事件。
+fn cli_subagent_append_history_exchange_id(
+    exchange_ids: &mut Vec<AIAgentExchangeId>,
+    exchange_id: AIAgentExchangeId,
+) -> bool {
+    if exchange_ids.contains(&exchange_id) {
+        return false;
+    }
+
+    exchange_ids.push(exchange_id);
+    true
 }
 
 lazy_static! {
@@ -228,6 +241,10 @@ struct StateHandles {
 pub struct CLISubagentView {
     block_id: BlockId,
     model: Rc<dyn AIBlockModel<View = CLISubagentView>>,
+    // CLI agent follow-up 会为同一个 subtask 追加多个 exchange；这里保留历史用于渲染旧轮次。
+    history_models: Vec<Rc<dyn AIBlockModel<View = CLISubagentView>>>,
+    // 与 history_models 对齐，用于防止重复 AppendedExchange 事件把同一轮渲染两次。
+    history_exchange_ids: Vec<AIAgentExchangeId>,
     subagent_controller: ModelHandle<CLISubagentController>,
     action_model: ModelHandle<BlocklistAIActionModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -393,20 +410,24 @@ impl CLISubagentView {
                     ..
                 } => {
                     if task_id == &task_id_clone {
+                        let appended_exchange_id = *exchange_id;
                         if let Ok(model) = AIBlockModelImpl::<CLISubagentView>::new(
-                            *exchange_id,
+                            appended_exchange_id,
                             *conversation_id,
                             false,
                             false,
                             ctx,
                         ) {
                             model.on_updated_output(
-                                Box::new(|me, ctx| {
-                                    me.handle_updated_exchange_output(ctx);
+                                Box::new(move |me, ctx| {
+                                    me.handle_updated_exchange_output(appended_exchange_id, ctx);
                                 }),
                                 ctx,
                             );
-                            me.model = Rc::new(model);
+                            let model: Rc<dyn AIBlockModel<View = CLISubagentView>> =
+                                Rc::new(model);
+                            me.append_history_model(appended_exchange_id, model.clone());
+                            me.model = model;
                             me.code_editor_views = Default::default();
                             me.code_editor_buttons = Default::default();
                             me.table_section_handles = Default::default();
@@ -452,12 +473,21 @@ impl CLISubagentView {
                 }
             },
         );
-        let exchange_id = history_model
+        let (exchange_id, initial_history_exchange_ids) = history_model
             .as_ref(ctx)
             .conversation(&conversation_id)
             .and_then(|c| {
                 c.get_task(&task_id)
-                    .and_then(|t| t.last_exchange().map(|e| e.id))
+                    .and_then(|t| {
+                        t.last_exchange().map(|last_exchange| {
+                            (
+                                last_exchange.id,
+                                t.exchanges()
+                                    .map(|exchange| exchange.id)
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                    })
                     .or_else(|| {
                         // Zap BYOP fallback:agent 自起 LRC 时
                         // `cli_controller::FinishedAction` 通过
@@ -466,14 +496,14 @@ impl CLISubagentView {
                         // `update_for_new_request_input`),用 root task 的 last
                         // exchange 占位。后续用户 follow-up query 路由到此 task →
                         // `AppendedExchange` → 上面的订阅(line 365-394)会自动
-                        // replace model 到真实 exchange,所以占位只在窗口创建瞬间
-                        // 短暂存在,UX 上不可见。
-                        let fallback = c.root_task_exchanges().last().map(|e| e.id);
+                        // 切到真实 exchange。占位不加入 history,避免显示不属于此
+                        // subtask 的 root exchange。
+                        let fallback = c.root_task_exchanges().last().map(|e| (e.id, Vec::new()));
                         if fallback.is_some() {
                             log::warn!(
                                 "[byop] CLISubagentView::new task={task_id:?} 暂无 \
                                  exchange,fallback 到 root_task last_exchange;\
-                                 等待 AppendedExchange 触发 replace。"
+                                 等待 AppendedExchange 触发切换。"
                             );
                         }
                         fallback
@@ -489,11 +519,40 @@ impl CLISubagentView {
         )
         .expect("Exchange exists.");
         model.on_updated_output(
-            Box::new(|me, ctx| {
-                me.handle_updated_exchange_output(ctx);
+            Box::new(move |me, ctx| {
+                me.handle_updated_exchange_output(exchange_id, ctx);
             }),
             ctx,
         );
+        let model: Rc<dyn AIBlockModel<View = CLISubagentView>> = Rc::new(model);
+        let mut history_models: Vec<Rc<dyn AIBlockModel<View = CLISubagentView>>> = Vec::new();
+        let mut history_exchange_ids = Vec::new();
+        for history_exchange_id in initial_history_exchange_ids {
+            if history_exchange_id == exchange_id {
+                if cli_subagent_append_history_exchange_id(
+                    &mut history_exchange_ids,
+                    history_exchange_id,
+                ) {
+                    history_models.push(model.clone());
+                }
+                continue;
+            }
+
+            if let Ok(history_model) = AIBlockModelImpl::<CLISubagentView>::new(
+                history_exchange_id,
+                conversation_id,
+                false,
+                false,
+                ctx,
+            ) {
+                if cli_subagent_append_history_exchange_id(
+                    &mut history_exchange_ids,
+                    history_exchange_id,
+                ) {
+                    history_models.push(Rc::new(history_model));
+                }
+            }
+        }
 
         ctx.subscribe_to_model(&subagent_controller, |me, _, event, ctx| match event {
             CLISubagentEvent::UpdatedControl { block_id, .. } => {
@@ -510,7 +569,9 @@ impl CLISubagentView {
 
         let mut view = Self {
             block_id,
-            model: Rc::new(model),
+            model,
+            history_models,
+            history_exchange_ids,
             action_model,
             terminal_model,
             subagent_controller,
@@ -540,6 +601,20 @@ impl CLISubagentView {
         };
         view.set_state_from_updated_inputs(ctx);
         view
+    }
+
+    fn append_history_model(
+        &mut self,
+        exchange_id: AIAgentExchangeId,
+        model: Rc<dyn AIBlockModel<View = CLISubagentView>>,
+    ) -> bool {
+        // 同一个 AppendedExchange 可能被多条订阅路径观察到，历史列表只保留一次。
+        if cli_subagent_append_history_exchange_id(&mut self.history_exchange_ids, exchange_id) {
+            self.history_models.push(model);
+            true
+        } else {
+            false
+        }
     }
 
     fn execute_pending_action(&mut self, ctx: &mut ViewContext<Self>) {
@@ -707,7 +782,16 @@ impl CLISubagentView {
         }
     }
 
-    fn handle_updated_exchange_output(&mut self, ctx: &mut ViewContext<Self>) {
+    fn handle_updated_exchange_output(
+        &mut self,
+        exchange_id: AIAgentExchangeId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.model.exchange_id(ctx) != Some(exchange_id) {
+            ctx.notify();
+            return;
+        }
+
         match self.model.status(ctx) {
             AIBlockOutputStatus::Pending => {
                 self.secret_redaction_state.reset();
@@ -883,11 +967,19 @@ impl CLISubagentView {
             handle.abort();
         }
 
-        let has_user_input = self
-            .model
-            .inputs_to_render(ctx)
-            .iter()
-            .any(|input| input.is_user_query());
+        let has_user_input = if self.history_models.is_empty() {
+            self.model
+                .inputs_to_render(ctx)
+                .iter()
+                .any(|input| input.is_user_query())
+        } else {
+            self.history_models.iter().any(|model| {
+                model
+                    .inputs_to_render(ctx)
+                    .iter()
+                    .any(|input| input.is_user_query())
+            })
+        };
         let should_hide_responses = self
             .terminal_model
             .lock()
@@ -915,27 +1007,44 @@ impl CLISubagentView {
 
         self.reset_input_dismiss_timer(ctx);
 
-        // Detect links in all user queries
-        for (input_index, input) in self.model.inputs_to_render(ctx).iter().enumerate() {
-            if let AIAgentInput::UserQuery { query, .. } = input {
-                detect_links(
-                    &mut self.link_detection_state,
+        let user_queries = if self.history_models.is_empty() {
+            self.model
+                .inputs_to_render(ctx)
+                .iter()
+                .filter_map(|input| match input {
+                    AIAgentInput::UserQuery { query, .. } => Some(query.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            self.history_models
+                .iter()
+                .flat_map(|model| model.inputs_to_render(ctx))
+                .filter_map(|input| match input {
+                    AIAgentInput::UserQuery { query, .. } => Some(query.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // 按历史顺序检测所有用户 query，确保旧轮次重新渲染后链接和脱敏索引仍然连续。
+        for (input_index, query) in user_queries.iter().enumerate() {
+            detect_links(
+                &mut self.link_detection_state,
+                query,
+                TextLocation::Query { input_index },
+                self.current_working_directory.as_ref(),
+                self.shell_launch_data.as_ref(),
+            );
+
+            let secret_redaction_mode = get_secret_obfuscation_mode(ctx);
+            if secret_redaction_mode.should_redact_secret() {
+                let should_obfuscate = secret_redaction_mode.is_visually_obfuscated();
+                self.secret_redaction_state.run_redaction_for_location(
                     query,
                     TextLocation::Query { input_index },
-                    self.current_working_directory.as_ref(),
-                    self.shell_launch_data.as_ref(),
+                    should_obfuscate,
                 );
-
-                // Run secret redaction on user queries
-                let secret_redaction_mode = get_secret_obfuscation_mode(ctx);
-                if secret_redaction_mode.should_redact_secret() {
-                    let should_obfuscate = secret_redaction_mode.is_visually_obfuscated();
-                    self.secret_redaction_state.run_redaction_for_location(
-                        query,
-                        TextLocation::Query { input_index },
-                        should_obfuscate,
-                    );
-                }
             }
         }
     }
@@ -1039,162 +1148,229 @@ impl View for CLISubagentView {
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-        // Render user queries/follow-ups with avatar and interactive text
-        let inputs = self.model.inputs_to_render(app);
-        for (input_index, input) in inputs.iter().enumerate() {
-            if let AIAgentInput::UserQuery { query, .. } = input {
-                let text = render_query_text(
-                    UserQueryProps {
-                        text: query.to_owned(),
-                        query_prefix_highlight_len: None,
-                        detected_links_state: &self.link_detection_state,
-                        secret_redaction_state: &self.secret_redaction_state,
-                        input_index,
-                        is_selecting: self.state_handles.query_selection_handle.is_selecting(),
-                        is_ai_input_enabled: false,
-                        find_context: None,
-                        font_properties: &Properties {
-                            style: Style::Normal,
-                            weight: Weight::Normal,
-                        },
-                    },
-                    app,
-                );
+        let models_to_render = if self.history_models.is_empty() {
+            vec![&self.model]
+        } else {
+            self.history_models.iter().collect::<Vec<_>>()
+        };
+        let mut rendered_query_index = 0;
+        let mut text_section_index = 0;
+        let model_count = models_to_render.len();
 
-                let selected_text = self.selected_text.clone();
-                let output_selection_handle = self.state_handles.output_selection_handle.clone();
-                let action_selection_handle = self.state_handles.action_selection_handle.clone();
-                let mut selectable_text = SelectableArea::new(
-                    self.state_handles.query_selection_handle.clone(),
-                    move |selection_args, ctx, _| {
-                        if let Some(selection) = selection_args
-                            .selection
-                            .filter(|selection| !selection.is_empty())
-                        {
-                            output_selection_handle.clear();
-                            action_selection_handle.clear();
-                            ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
-                                selection.clone(),
-                            ));
-                            *selected_text.write() = Some(selection);
-                            ctx.dispatch_typed_action(CLISubagentAction::SelectText);
-                        }
-                    },
-                    text.finish(),
-                )
-                .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
-                .with_smart_select_fn(semantic_selection.smart_select_fn());
+        for (model_index, model) in models_to_render.into_iter().enumerate() {
+            let is_latest_model = model_index + 1 == model_count;
 
-                if FeatureFlag::RectSelection.is_enabled() {
-                    selectable_text = selectable_text.should_support_rect_select();
-                }
-
-                let scrollable_container = render_scrollable_container(
-                    ScrollableContainerProps {
-                        scroll_state: self.state_handles.query_scroll_state.clone(),
-                        child: selectable_text.finish(),
-                        background_color: internal_colors::accent_bg(theme).into(),
-                        border: Some(Border::all(1.).with_border_fill(theme.accent())),
-                        max_height: resizable_height,
-                    },
-                    app,
-                )
-                .with_margin_bottom(8.)
-                .finish();
-
-                let dismissable_stack = render_dismissable_container(
-                    DismissableContainerProps {
-                        child: scrollable_container,
-                        hover_state: self.state_handles.input_hover_state.clone(),
-                        dismiss_mouse_state: self.state_handles.dismiss_input_mouse_state.clone(),
-                        position_id: USER_QUERY_POSITION_ID.to_string(),
-                    },
-                    app,
-                );
-
-                if !self.is_input_dismissed {
-                    result.add_child(dismissable_stack);
-                }
-            }
-        }
-
-        // Render agent outputs and actions
-        let mut output_items = Flex::column()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-
-        let status = self.model.status(app);
-        let blocked_action = self.model.blocked_action(&self.action_model, app);
-        let should_hide_responses = block.should_hide_responses();
-
-        if let Some(output) = status.output_to_render() {
-            let output = output.get();
-
-            let mut code_section_index = 0;
-            let mut text_section_index = 0;
-            let mut table_section_index = 0;
-            let mut image_section_index = 0;
-
-            fn copy_code_action(snippet: String) -> CLISubagentAction {
-                CLISubagentAction::CopyCode(snippet)
-            }
-
-            fn open_code_block_action(source: CodeSource) -> CLISubagentAction {
-                CLISubagentAction::OpenCodeBlock(source)
-            }
-
-            for output_message in output.messages.iter() {
-                match &output_message.message {
-                    AIAgentOutputMessageType::Text(AIAgentText { sections })
-                        if !are_all_text_sections_empty(sections) =>
-                    {
-                        let text_color = blended_colors::text_main(theme, theme.surface_1());
-                        output_items.add_child(render_text_sections(
-                            TextSectionsProps {
-                                model: self.model.as_ref(),
-                                starting_text_section_index: &mut text_section_index,
-                                starting_code_section_index: &mut code_section_index,
-                                starting_table_section_index: &mut table_section_index,
-                                starting_image_section_index: &mut image_section_index,
-                                sections,
-                                is_selecting_text: self
-                                    .state_handles
-                                    .output_selection_handle
-                                    .is_selecting(),
-                                selectable: true,
-                                text_color,
-                                is_ai_input_enabled: false,
-                                secret_redaction_state: &self.secret_redaction_state,
-                                find_context: None,
-                                shell_launch_data: None,
-                                current_working_directory: None,
-                                embedded_code_editor_views: &self.code_editor_views,
-                                code_snippet_button_handles: &self.code_editor_buttons,
-                                table_section_handles: &self.table_section_handles,
-                                // CLI subagent blocks don't render block-list images yet,
-                                // so there are no per-image tooltip handles to thread.
-                                image_section_tooltip_handles: &[],
-                                open_code_block_action_factory: Some(&open_code_block_action),
-                                copy_code_action_factory: Some(&copy_code_action),
-                                detected_links: Some(&self.link_detection_state),
-                                item_spacing: CONTENT_PADDING,
-                                #[cfg(feature = "local_fs")]
-                                resolved_code_block_paths: None,
-                                #[cfg(feature = "local_fs")]
-                                resolved_blocklist_image_sources: None,
+            // Render user queries/follow-ups with avatar and interactive text
+            let inputs = model.inputs_to_render(app);
+            for input in inputs.iter() {
+                if let AIAgentInput::UserQuery { query, .. } = input {
+                    let input_index = rendered_query_index;
+                    rendered_query_index += 1;
+                    let text = render_query_text(
+                        UserQueryProps {
+                            text: query.to_owned(),
+                            query_prefix_highlight_len: None,
+                            detected_links_state: &self.link_detection_state,
+                            secret_redaction_state: &self.secret_redaction_state,
+                            input_index,
+                            is_selecting: self.state_handles.query_selection_handle.is_selecting(),
+                            is_ai_input_enabled: false,
+                            find_context: None,
+                            font_properties: &Properties {
+                                style: Style::Normal,
+                                weight: Weight::Normal,
                             },
-                            app,
-                        ));
-                    }
-                    AIAgentOutputMessageType::Action(action) => {
-                        let is_cancelled = self
-                            .action_model
-                            .as_ref(app)
-                            .get_action_status(&action.id)
-                            .is_some_and(|status| status.is_cancelled());
-                        if blocked_action.is_none() && !is_cancelled && !should_hide_responses {
-                            if let Some(rendered_action) = render_action(action.action.clone(), app)
+                        },
+                        app,
+                    );
+
+                    let selected_text = self.selected_text.clone();
+                    let output_selection_handle =
+                        self.state_handles.output_selection_handle.clone();
+                    let action_selection_handle =
+                        self.state_handles.action_selection_handle.clone();
+                    let mut selectable_text = SelectableArea::new(
+                        self.state_handles.query_selection_handle.clone(),
+                        move |selection_args, ctx, _| {
+                            if let Some(selection) = selection_args
+                                .selection
+                                .filter(|selection| !selection.is_empty())
                             {
+                                output_selection_handle.clear();
+                                action_selection_handle.clear();
+                                ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
+                                    selection.clone(),
+                                ));
+                                *selected_text.write() = Some(selection);
+                                ctx.dispatch_typed_action(CLISubagentAction::SelectText);
+                            }
+                        },
+                        text.finish(),
+                    )
+                    .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
+                    .with_smart_select_fn(semantic_selection.smart_select_fn());
+
+                    if FeatureFlag::RectSelection.is_enabled() {
+                        selectable_text = selectable_text.should_support_rect_select();
+                    }
+
+                    let scrollable_container = render_scrollable_container(
+                        ScrollableContainerProps {
+                            scroll_state: self.state_handles.query_scroll_state.clone(),
+                            child: selectable_text.finish(),
+                            background_color: internal_colors::accent_bg(theme).into(),
+                            border: Some(Border::all(1.).with_border_fill(theme.accent())),
+                            max_height: resizable_height,
+                        },
+                        app,
+                    )
+                    .with_margin_bottom(8.)
+                    .finish();
+
+                    let dismissable_stack = render_dismissable_container(
+                        DismissableContainerProps {
+                            child: scrollable_container,
+                            hover_state: self.state_handles.input_hover_state.clone(),
+                            dismiss_mouse_state: self
+                                .state_handles
+                                .dismiss_input_mouse_state
+                                .clone(),
+                            position_id: USER_QUERY_POSITION_ID.to_string(),
+                        },
+                        app,
+                    );
+
+                    if !self.is_input_dismissed {
+                        result.add_child(dismissable_stack);
+                    }
+                }
+            }
+
+            // Render agent outputs and actions
+            let mut output_items = Flex::column()
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+
+            let status = model.status(app);
+            let blocked_action = if is_latest_model {
+                model.blocked_action(&self.action_model, app)
+            } else {
+                None
+            };
+            let should_hide_responses = block.should_hide_responses();
+
+            if let Some(output) = status.output_to_render() {
+                let output = output.get();
+
+                let mut code_section_index = 0;
+                let mut table_section_index = 0;
+                let mut image_section_index = 0;
+
+                fn copy_code_action(snippet: String) -> CLISubagentAction {
+                    CLISubagentAction::CopyCode(snippet)
+                }
+
+                fn open_code_block_action(source: CodeSource) -> CLISubagentAction {
+                    CLISubagentAction::OpenCodeBlock(source)
+                }
+
+                for output_message in output.messages.iter() {
+                    match &output_message.message {
+                        AIAgentOutputMessageType::Text(AIAgentText { sections })
+                            if !are_all_text_sections_empty(sections) =>
+                        {
+                            let text_color = blended_colors::text_main(theme, theme.surface_1());
+                            output_items.add_child(render_text_sections(
+                                TextSectionsProps {
+                                    model: model.as_ref(),
+                                    starting_text_section_index: &mut text_section_index,
+                                    starting_code_section_index: &mut code_section_index,
+                                    starting_table_section_index: &mut table_section_index,
+                                    starting_image_section_index: &mut image_section_index,
+                                    sections,
+                                    is_selecting_text: self
+                                        .state_handles
+                                        .output_selection_handle
+                                        .is_selecting(),
+                                    selectable: true,
+                                    text_color,
+                                    is_ai_input_enabled: false,
+                                    secret_redaction_state: &self.secret_redaction_state,
+                                    find_context: None,
+                                    shell_launch_data: None,
+                                    current_working_directory: None,
+                                    embedded_code_editor_views: if is_latest_model {
+                                        &self.code_editor_views
+                                    } else {
+                                        &[]
+                                    },
+                                    code_snippet_button_handles: if is_latest_model {
+                                        &self.code_editor_buttons
+                                    } else {
+                                        &[]
+                                    },
+                                    table_section_handles: if is_latest_model {
+                                        &self.table_section_handles
+                                    } else {
+                                        &[]
+                                    },
+                                    // CLI subagent blocks don't render block-list images yet,
+                                    // so there are no per-image tooltip handles to thread.
+                                    image_section_tooltip_handles: &[],
+                                    open_code_block_action_factory: Some(&open_code_block_action),
+                                    copy_code_action_factory: Some(&copy_code_action),
+                                    detected_links: Some(&self.link_detection_state),
+                                    item_spacing: CONTENT_PADDING,
+                                    #[cfg(feature = "local_fs")]
+                                    resolved_code_block_paths: None,
+                                    #[cfg(feature = "local_fs")]
+                                    resolved_blocklist_image_sources: None,
+                                },
+                                app,
+                            ));
+                        }
+                        AIAgentOutputMessageType::Action(action) => {
+                            let is_cancelled = self
+                                .action_model
+                                .as_ref(app)
+                                .get_action_status(&action.id)
+                                .is_some_and(|status| status.is_cancelled());
+                            if is_latest_model
+                                && blocked_action.is_none()
+                                && !is_cancelled
+                                && !should_hide_responses
+                            {
+                                if let Some(rendered_action) =
+                                    render_action(action.action.clone(), app)
+                                {
+                                    result.add_child(
+                                        render_scrollable_container(
+                                            ScrollableContainerProps {
+                                                scroll_state: self
+                                                    .state_handles
+                                                    .action_scroll_state
+                                                    .clone(),
+                                                child: rendered_action,
+                                                background_color: internal_colors::neutral_2(
+                                                    appearance.theme(),
+                                                ),
+                                                border: Some(Border::all(1.).with_border_fill(
+                                                    internal_colors::neutral_3(theme),
+                                                )),
+                                                max_height: resizable_height,
+                                            },
+                                            app,
+                                        )
+                                        .with_margin_bottom(8.)
+                                        .finish(),
+                                    );
+                                }
+                            }
+                        }
+                        AIAgentOutputMessageType::WebSearch(WebSearchStatus::Searching {
+                            query,
+                        }) => {
+                            if is_latest_model && !should_hide_responses {
                                 result.add_child(
                                     render_scrollable_container(
                                         ScrollableContainerProps {
@@ -1202,7 +1378,7 @@ impl View for CLISubagentView {
                                                 .state_handles
                                                 .action_scroll_state
                                                 .clone(),
-                                            child: rendered_action,
+                                            child: render_web_search(query.clone(), app),
                                             background_color: internal_colors::neutral_2(
                                                 appearance.theme(),
                                             ),
@@ -1218,57 +1394,30 @@ impl View for CLISubagentView {
                                 );
                             }
                         }
+                        _ => (),
                     }
-                    AIAgentOutputMessageType::WebSearch(WebSearchStatus::Searching { query }) => {
-                        if !should_hide_responses {
-                            result.add_child(
-                                render_scrollable_container(
-                                    ScrollableContainerProps {
-                                        scroll_state: self
-                                            .state_handles
-                                            .action_scroll_state
-                                            .clone(),
-                                        child: render_web_search(query.clone(), app),
-                                        background_color: internal_colors::neutral_2(
-                                            appearance.theme(),
-                                        ),
-                                        border: Some(
-                                            Border::all(1.).with_border_fill(
-                                                internal_colors::neutral_3(theme),
-                                            ),
-                                        ),
-                                        max_height: resizable_height,
-                                    },
-                                    app,
-                                )
-                                .with_margin_bottom(8.)
-                                .finish(),
-                            );
-                        }
-                    }
-                    _ => (),
                 }
             }
-        }
 
-        let mut output_border = Border::all(1.).with_border_fill(internal_colors::neutral_3(theme));
-        if let AIBlockOutputStatus::Failed { error, .. } = &status {
-            output_border = Border::all(1.).with_border_color(theme.ui_error_color());
-            output_items.add_child(render_failed_output(
-                FailedOutputProps {
-                    error,
-                    is_ai_input_enabled: false,
-                    invalid_api_key_button_handle: &self
-                        .state_handles
-                        .invalid_api_key_button_handle,
-                    aws_bedrock_credentials_error_view: None,
-                    icon_right_margin: AVATAR_RIGHT_MARGIN,
-                },
-                app,
-            ));
+            let mut output_border =
+                Border::all(1.).with_border_fill(internal_colors::neutral_3(theme));
+            if let AIBlockOutputStatus::Failed { error, .. } = &status {
+                output_border = Border::all(1.).with_border_color(theme.ui_error_color());
+                output_items.add_child(render_failed_output(
+                    FailedOutputProps {
+                        error,
+                        is_ai_input_enabled: false,
+                        invalid_api_key_button_handle: &self
+                            .state_handles
+                            .invalid_api_key_button_handle,
+                        aws_bedrock_credentials_error_view: None,
+                        icon_right_margin: AVATAR_RIGHT_MARGIN,
+                    },
+                    app,
+                ));
 
-            if !self.model.is_restored() && !error.is_invalid_api_key() {
-                output_items.add_child(
+                if is_latest_model && !model.is_restored() && !error.is_invalid_api_key() {
+                    output_items.add_child(
                     Container::new(render_informational_footer(
                         app,
                         "This response won't count towards your usage. \"Take over\" to continue."
@@ -1279,94 +1428,136 @@ impl View for CLISubagentView {
                     .finish(),
                 );
 
-                output_items.add_child(
-                    Container::new(render_debug_footer(
-                        DebugFooterProps {
-                            conversation: self.model.conversation(app),
-                            model: self.model.as_ref(),
-                            debug_copy_button_handle: self
-                                .state_handles
-                                .debug_copy_button_handle
-                                .clone(),
-                            submit_issue_button_handle: self
-                                .state_handles
-                                .submit_issue_button_handle
-                                .clone(),
-                            should_render_feedback_below: true,
+                    output_items.add_child(
+                        Container::new(render_debug_footer(
+                            DebugFooterProps {
+                                conversation: model.conversation(app),
+                                model: model.as_ref(),
+                                debug_copy_button_handle: self
+                                    .state_handles
+                                    .debug_copy_button_handle
+                                    .clone(),
+                                submit_issue_button_handle: self
+                                    .state_handles
+                                    .submit_issue_button_handle
+                                    .clone(),
+                                should_render_feedback_below: true,
+                            },
+                            |debug_id, ctx| {
+                                ctx.dispatch_typed_action(CLISubagentAction::CopyDebugId(debug_id))
+                            },
+                            |ctx| ctx.dispatch_typed_action(CLISubagentAction::OpenFeedbackDocs),
+                            app,
+                        ))
+                        .with_margin_top(8.)
+                        .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
+                        .finish(),
+                    );
+                }
+            }
+
+            if !output_items.is_empty() && !should_hide_responses {
+                let selected_text = self.selected_text.clone();
+                let query_selection_handle = self.state_handles.query_selection_handle.clone();
+                let action_selection_handle = self.state_handles.action_selection_handle.clone();
+                let mut output = SelectableArea::new(
+                    self.state_handles.output_selection_handle.clone(),
+                    move |selection_args, ctx, _| {
+                        if let Some(selection) = selection_args
+                            .selection
+                            .filter(|selection| !selection.is_empty())
+                        {
+                            query_selection_handle.clear();
+                            action_selection_handle.clear();
+                            ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
+                                selection.clone(),
+                            ));
+                            *selected_text.write() = Some(selection);
+                            ctx.dispatch_typed_action(CLISubagentAction::SelectText);
+                        }
+                    },
+                    output_items.finish(),
+                )
+                .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
+                .with_smart_select_fn(semantic_selection.smart_select_fn());
+
+                if FeatureFlag::RectSelection.is_enabled() {
+                    output = output.should_support_rect_select();
+                }
+
+                result.add_child(
+                    render_scrollable_container(
+                        ScrollableContainerProps {
+                            scroll_state: self.state_handles.output_scroll_state.clone(),
+                            child: output.finish(),
+                            background_color: internal_colors::neutral_2(appearance.theme()),
+                            border: Some(output_border),
+                            max_height: resizable_height,
                         },
-                        |debug_id, ctx| {
-                            ctx.dispatch_typed_action(CLISubagentAction::CopyDebugId(debug_id))
-                        },
-                        |ctx| ctx.dispatch_typed_action(CLISubagentAction::OpenFeedbackDocs),
                         app,
-                    ))
-                    .with_margin_top(8.)
-                    .with_margin_left(icon_size(app) + AVATAR_RIGHT_MARGIN)
+                    )
+                    .with_margin_bottom(8.)
                     .finish(),
                 );
             }
-        }
 
-        if !output_items.is_empty() && !should_hide_responses {
-            let selected_text = self.selected_text.clone();
-            let query_selection_handle = self.state_handles.query_selection_handle.clone();
-            let action_selection_handle = self.state_handles.action_selection_handle.clone();
-            let mut output = SelectableArea::new(
-                self.state_handles.output_selection_handle.clone(),
-                move |selection_args, ctx, _| {
-                    if let Some(selection) = selection_args
-                        .selection
-                        .filter(|selection| !selection.is_empty())
-                    {
-                        query_selection_handle.clear();
-                        action_selection_handle.clear();
-                        ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
-                            selection.clone(),
-                        ));
-                        *selected_text.write() = Some(selection);
-                        ctx.dispatch_typed_action(CLISubagentAction::SelectText);
-                    }
-                },
-                output_items.finish(),
-            )
-            .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
-            .with_smart_select_fn(semantic_selection.smart_select_fn());
-
-            if FeatureFlag::RectSelection.is_enabled() {
-                output = output.should_support_rect_select();
-            }
-
-            result.add_child(
-                render_scrollable_container(
-                    ScrollableContainerProps {
-                        scroll_state: self.state_handles.output_scroll_state.clone(),
-                        child: output.finish(),
-                        background_color: internal_colors::neutral_2(appearance.theme()),
-                        border: Some(output_border),
-                        max_height: resizable_height,
-                    },
-                    app,
-                )
-                .with_margin_bottom(8.)
-                .finish(),
-            );
-        }
-
-        if let Some(rendered_action) = blocked_action.and_then(|action| match action.action {
-            AIAgentActionType::WriteToLongRunningShellCommand { input, mode, .. } => {
-                Some(render_blocked_action(
+            if let Some(rendered_action) = blocked_action.and_then(|action| match action.action {
+                AIAgentActionType::WriteToLongRunningShellCommand { input, mode, .. } => {
+                    Some(render_blocked_action(
+                        BlockedActionProps {
+                            header: BLOCKED_ACTION_MESSAGE_FOR_WRITE_TO_LONG_RUNNING_SHELL_COMMAND
+                                .to_string(),
+                            description: Some(render_write_to_pty_input(
+                                WriteToPtyInputProps {
+                                    input: input.clone(),
+                                    mode,
+                                    scroll_state: self.state_handles.input_scroll_state.clone(),
+                                    max_height: resizable_height,
+                                },
+                                app,
+                            )),
+                            is_allow_menu_open: self.is_allow_menu_open,
+                            allow_menu: Some(&self.allow_menu),
+                            buttons: vec![
+                                &self.allow_button,
+                                &self.reject_button,
+                                &self.take_over_button,
+                            ],
+                            speedbump: should_show_write_to_pty_speedbump(app).then_some(
+                                PermissionsSpeedbumpProps {
+                                    always_allow_checked: self.always_allow_write_to_pty_checked,
+                                    speedbump_checkbox_handle: &self
+                                        .state_handles
+                                        .speedbump_checkbox_handle,
+                                    speedbump_checkbox_action:
+                                        CLISubagentAction::ToggleAlwaysAllowWriteToPty,
+                                    ai_settings_link: &self.state_handles.ai_settings_link,
+                                },
+                            ),
+                        },
+                        app,
+                    ))
+                }
+                AIAgentActionType::TransferShellCommandControlToUser { ref reason } => {
+                    Some(render_blocked_action(
+                        BlockedActionProps {
+                            header: BLOCKED_ACTION_MESSAGE_FOR_TRANSFER_CONTROL.to_string(),
+                            description: Some(render_transfer_control_reason(reason, app)),
+                            is_allow_menu_open: false,
+                            allow_menu: None,
+                            buttons: vec![&self.reject_button, &self.transfer_control_button],
+                            speedbump: None,
+                        },
+                        app,
+                    ))
+                }
+                AIAgentActionType::ReadFiles(..)
+                | AIAgentActionType::Grep { .. }
+                | AIAgentActionType::FileGlobV2 { .. } => Some(render_blocked_action(
                     BlockedActionProps {
-                        header: BLOCKED_ACTION_MESSAGE_FOR_WRITE_TO_LONG_RUNNING_SHELL_COMMAND
-                            .to_string(),
-                        description: Some(render_write_to_pty_input(
-                            WriteToPtyInputProps {
-                                input: input.clone(),
-                                mode,
-                                scroll_state: self.state_handles.input_scroll_state.clone(),
-                                max_height: resizable_height,
-                            },
-                            app,
-                        )),
+                        header: get_blocked_action_header(action.action.clone())
+                            .unwrap_or_default(),
+                        description: render_search_action_input(action.action.clone(), app),
                         is_allow_menu_open: self.is_allow_menu_open,
                         allow_menu: Some(&self.allow_menu),
                         buttons: vec![
@@ -1374,96 +1565,56 @@ impl View for CLISubagentView {
                             &self.reject_button,
                             &self.take_over_button,
                         ],
-                        speedbump: should_show_write_to_pty_speedbump(app).then_some(
+                        speedbump: should_show_read_files_speedbump(app).then_some(
                             PermissionsSpeedbumpProps {
-                                always_allow_checked: self.always_allow_write_to_pty_checked,
+                                always_allow_checked: self.always_allow_read_files_checked,
                                 speedbump_checkbox_handle: &self
                                     .state_handles
                                     .speedbump_checkbox_handle,
                                 speedbump_checkbox_action:
-                                    CLISubagentAction::ToggleAlwaysAllowWriteToPty,
+                                    CLISubagentAction::ToggleAlwaysAllowReadFiles,
                                 ai_settings_link: &self.state_handles.ai_settings_link,
                             },
                         ),
                     },
                     app,
-                ))
-            }
-            AIAgentActionType::TransferShellCommandControlToUser { ref reason } => {
-                Some(render_blocked_action(
-                    BlockedActionProps {
-                        header: BLOCKED_ACTION_MESSAGE_FOR_TRANSFER_CONTROL.to_string(),
-                        description: Some(render_transfer_control_reason(reason, app)),
-                        is_allow_menu_open: false,
-                        allow_menu: None,
-                        buttons: vec![&self.reject_button, &self.transfer_control_button],
-                        speedbump: None,
+                )),
+                _ => None,
+            }) {
+                let selected_text = self.selected_text.clone();
+                let query_selection_handle = self.state_handles.query_selection_handle.clone();
+                let output_selection_handle = self.state_handles.output_selection_handle.clone();
+                let mut selectable_action = SelectableArea::new(
+                    self.state_handles.action_selection_handle.clone(),
+                    move |selection_args, ctx, _| {
+                        if let Some(selection) = selection_args
+                            .selection
+                            .filter(|selection| !selection.is_empty())
+                        {
+                            query_selection_handle.clear();
+                            output_selection_handle.clear();
+                            ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
+                                selection.clone(),
+                            ));
+                            *selected_text.write() = Some(selection);
+                            ctx.dispatch_typed_action(CLISubagentAction::SelectText);
+                        }
                     },
-                    app,
-                ))
-            }
-            AIAgentActionType::ReadFiles(..)
-            | AIAgentActionType::Grep { .. }
-            | AIAgentActionType::FileGlobV2 { .. } => Some(render_blocked_action(
-                BlockedActionProps {
-                    header: get_blocked_action_header(action.action.clone()).unwrap_or_default(),
-                    description: render_search_action_input(action.action.clone(), app),
-                    is_allow_menu_open: self.is_allow_menu_open,
-                    allow_menu: Some(&self.allow_menu),
-                    buttons: vec![
-                        &self.allow_button,
-                        &self.reject_button,
-                        &self.take_over_button,
-                    ],
-                    speedbump: should_show_read_files_speedbump(app).then_some(
-                        PermissionsSpeedbumpProps {
-                            always_allow_checked: self.always_allow_read_files_checked,
-                            speedbump_checkbox_handle: &self
-                                .state_handles
-                                .speedbump_checkbox_handle,
-                            speedbump_checkbox_action:
-                                CLISubagentAction::ToggleAlwaysAllowReadFiles,
-                            ai_settings_link: &self.state_handles.ai_settings_link,
-                        },
-                    ),
-                },
-                app,
-            )),
-            _ => None,
-        }) {
-            let selected_text = self.selected_text.clone();
-            let query_selection_handle = self.state_handles.query_selection_handle.clone();
-            let output_selection_handle = self.state_handles.output_selection_handle.clone();
-            let mut selectable_action = SelectableArea::new(
-                self.state_handles.action_selection_handle.clone(),
-                move |selection_args, ctx, _| {
-                    if let Some(selection) = selection_args
-                        .selection
-                        .filter(|selection| !selection.is_empty())
-                    {
-                        query_selection_handle.clear();
-                        output_selection_handle.clear();
-                        ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
-                            selection.clone(),
-                        ));
-                        *selected_text.write() = Some(selection);
-                        ctx.dispatch_typed_action(CLISubagentAction::SelectText);
-                    }
-                },
-                rendered_action,
-            )
-            .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
-            .with_smart_select_fn(semantic_selection.smart_select_fn());
+                    rendered_action,
+                )
+                .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
+                .with_smart_select_fn(semantic_selection.smart_select_fn());
 
-            if FeatureFlag::RectSelection.is_enabled() {
-                selectable_action = selectable_action.should_support_rect_select();
-            }
+                if FeatureFlag::RectSelection.is_enabled() {
+                    selectable_action = selectable_action.should_support_rect_select();
+                }
 
-            result.add_child(
-                Container::new(selectable_action.finish())
-                    .with_margin_bottom(8.)
-                    .finish(),
-            );
+                result.add_child(
+                    Container::new(selectable_action.finish())
+                        .with_margin_bottom(8.)
+                        .finish(),
+                );
+            }
         }
 
         let content = result.finish();
@@ -2259,5 +2410,40 @@ mod tests {
     #[test]
     fn cli_subagent_resize_height_bounds_do_not_drop_below_panel_minimum() {
         assert_eq!(cli_subagent_height_bounds(50.0), (40.0, 40.0));
+    }
+
+    #[test]
+    fn cli_subagent_history_exchange_ids_append_new_rounds_in_order() {
+        let first_exchange_id = crate::ai::agent::AIAgentExchangeId::new();
+        let second_exchange_id = crate::ai::agent::AIAgentExchangeId::new();
+        let mut exchange_ids = Vec::new();
+
+        assert!(cli_subagent_append_history_exchange_id(
+            &mut exchange_ids,
+            first_exchange_id
+        ));
+        assert!(cli_subagent_append_history_exchange_id(
+            &mut exchange_ids,
+            second_exchange_id
+        ));
+
+        assert_eq!(exchange_ids, vec![first_exchange_id, second_exchange_id]);
+    }
+
+    #[test]
+    fn cli_subagent_history_exchange_ids_ignore_duplicate_exchange() {
+        let exchange_id = crate::ai::agent::AIAgentExchangeId::new();
+        let mut exchange_ids = Vec::new();
+
+        assert!(cli_subagent_append_history_exchange_id(
+            &mut exchange_ids,
+            exchange_id
+        ));
+        assert!(!cli_subagent_append_history_exchange_id(
+            &mut exchange_ids,
+            exchange_id
+        ));
+
+        assert_eq!(exchange_ids, vec![exchange_id]);
     }
 }
