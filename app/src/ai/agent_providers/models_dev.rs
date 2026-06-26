@@ -269,6 +269,20 @@ pub fn toggle_chips_expanded() {
     CHIPS_EXPANDED.fetch_xor(true, Ordering::Relaxed);
 }
 
+// ── 最近一次网络拉取失败标志 ─────────────────────────────────────────────────
+
+static FETCH_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// 最近一次网络拉取是否失败（cached() == None 时有意义）。
+pub fn last_fetch_failed() -> bool {
+    FETCH_FAILED.load(Ordering::Relaxed)
+}
+
+/// 由调用方在 spawn 回调中设置（失败 true，成功不需要重置，因为 cached() 此时为 Some）。
+pub fn set_fetch_failed(failed: bool) {
+    FETCH_FAILED.store(failed, Ordering::Relaxed);
+}
+
 // ── 快速添加 chip 行的搜索过滤 ──────────────────────────────────────────────
 
 fn search_state() -> &'static RwLock<String> {

@@ -1462,10 +1462,15 @@ impl AgentProvidersWidget {
 
         match models_dev::cached() {
             None => {
+                let catalog_text = if models_dev::last_fetch_failed() {
+                    crate::t!("settings-agent-providers-catalog-empty")
+                } else {
+                    crate::t!("settings-agent-providers-loading-catalog")
+                };
                 body.add_child(
                     Container::new(
                         Text::new(
-                            crate::t!("settings-agent-providers-loading-catalog"),
+                            catalog_text,
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
