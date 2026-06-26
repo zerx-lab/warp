@@ -1491,6 +1491,7 @@ settings-agent-providers-quick-add-title = 快速添加
 settings-agent-providers-refresh-catalog = 刷新目录
 settings-agent-providers-loading-catalog = 正在拉取 models.dev 目录…（第一次可能需要几秒）
 settings-agent-providers-catalog-empty = models.dev 目录为空，点 [刷新目录] 重试。
+settings-agent-providers-catalog-load-failed = models.dev 目录拉取失败，点 [刷新目录] 重试。
 settings-agent-providers-no-match = 无匹配「{ $query }」
 settings-agent-providers-collapse = 收起 ▲
 settings-agent-providers-expand-remaining = 展开剩余 { $count } 个 ▼

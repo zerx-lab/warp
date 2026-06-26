@@ -1516,6 +1516,7 @@ settings-agent-providers-quick-add-title = Quick add
 settings-agent-providers-refresh-catalog = Refresh catalog
 settings-agent-providers-loading-catalog = Loading models.dev catalog… (the first load may take a few seconds)
 settings-agent-providers-catalog-empty = models.dev catalog is empty. Click [Refresh catalog] to retry.
+settings-agent-providers-catalog-load-failed = Failed to load models.dev catalog. Click [Refresh catalog] to retry.
 settings-agent-providers-no-match = No match for "{ $query }"
 settings-agent-providers-collapse = Collapse ▲
 settings-agent-providers-expand-remaining = Expand remaining { $count } ▼

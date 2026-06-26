@@ -1451,6 +1451,7 @@ settings-agent-providers-quick-add-title = クイック追加
 settings-agent-providers-refresh-catalog = カタログを更新
 settings-agent-providers-loading-catalog = models.dev カタログを読み込み中… (初回読み込みは数秒かかる場合があります)
 settings-agent-providers-catalog-empty = models.dev カタログが空です。[カタログを更新] をクリックして再試行してください。
+settings-agent-providers-catalog-load-failed = models.dev カタログの取得に失敗しました。[カタログを更新] をクリックして再試行してください。
 settings-agent-providers-no-match = 「{ $query }」に一致する項目はありません
 settings-agent-providers-collapse = 折りたたむ ▲
 settings-agent-providers-expand-remaining = 残り { $count } 件を展開 ▼
