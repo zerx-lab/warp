@@ -140,28 +140,19 @@ impl Adapter for OpenAIRespAdapter {
 
 		// -- Set reasoning options
 		//
-		// The `reasoning` object on the request controls two things:
-		//   * `.effort` — how much reasoning the model should do
-		//   * `.summary` — whether a text summary of the reasoning is
-		//     returned in the response (required to populate
-		//     `ChatResponse.reasoning_content` for the Responses API)
-		//
-		// Either half is sufficient to warrant inserting the object;
-		// previously the object was only emitted when `reasoning_effort`
-		// was set, which silently defeated `capture_reasoning_content(true)`
-		// on its own — callers asking for reasoning capture got no
-		// `summary=detailed` opt-in, and every response came back with
-		// empty `reasoning_content`.
+		// Only emit the `reasoning` object when the caller has explicitly set a
+		// reasoning effort level.  Non-reasoning models (e.g. gpt-5.3-codex-spark)
+		// reject any request that includes a `reasoning` key and return 400/502.
+		// `capture_reasoning_content` is set unconditionally by the app for all
+		// models, so it cannot be used as the gate here.
 		let capture_reasoning = chat_options.capture_reasoning_content() == Some(true);
 		let effort_keyword = reasoning_effort.and_then(|e| e.as_keyword());
 
-		if effort_keyword.is_some() || capture_reasoning {
+		if let Some(keyword) = effort_keyword {
 			let mut reasoning_obj = json!({});
-			if let Some(keyword) = effort_keyword {
-				reasoning_obj
-					.x_insert("effort", keyword)
-					.map_err(|e| Error::Internal(format!("reasoning effort insert: {e}")))?;
-			}
+			reasoning_obj
+				.x_insert("effort", keyword)
+				.map_err(|e| Error::Internal(format!("reasoning effort insert: {e}")))?;
 			if capture_reasoning {
 				reasoning_obj
 					.x_insert("summary", "detailed")
