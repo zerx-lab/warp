@@ -1557,6 +1557,15 @@ impl EventLoop {
                 {
                     return;
                 }
+                // 记录 preedit 文本是否变化：update_ime_position 读取的是终端光标位置，该
+                // 位置只有在 preedit 文本实际改变时才会移动。若同文本仅 cursor_position 不同
+                // (IME 对 set_ime_cursor_area 的回声)，调用 update_ime_position 会再次触发
+                // 回送，引发 2-步振荡崩溃（Fixes #213）。
+                let preedit_text_changed = self
+                    .last_preedit
+                    .as_ref()
+                    .map(|(text, _)| text != &preedit_text)
+                    .unwrap_or(true);
                 self.last_preedit = Some((preedit_text.clone(), cursor_position));
 
                 let Some(window_state) = self.state.windows.get_mut(&winit_window_id) else {
@@ -1580,8 +1589,11 @@ impl EventLoop {
 
                 // composition 期间光标会因为预编辑文本插入、换行而移动,需要持续把最新的
                 // 矩形推给 IMM,否则候选窗会停留在 composition 起始位置(在某些 IME 上会
-                // 表现为候选窗与当前输入位置错位)。
-                self.update_ime_position();
+                // 表现为候选窗与当前输入位置错位)。仅当文本变化时才重新定位，避免同文本
+                // 不同 cursor_position 的 IME 回声触发新一轮振荡。
+                if preedit_text_changed {
+                    self.update_ime_position();
+                }
             }
             winit::event::Ime::Commit(chars) => {
                 // composition 已提交,清掉去重基准,避免下一轮起始 preedit 被误判为重复。
