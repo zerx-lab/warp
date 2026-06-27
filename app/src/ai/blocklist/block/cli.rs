@@ -118,8 +118,9 @@ use super::{
 };
 const MENU_WIDTH: f32 = 200.0;
 const MAX_HEIGHT: f32 = 320.0;
-// CLI agent 浮窗的最小宽度，避免内容被拖到不可读。
-const MIN_RESIZABLE_WIDTH: f32 = 360.0;
+// CLI agent 浮窗的最小宽度，避免内容被拖到不可读；外层布局也复用该值保持约束一致。
+pub(crate) const CLI_SUBAGENT_MIN_RESIZABLE_WIDTH: f32 = 360.0;
+const MIN_RESIZABLE_WIDTH: f32 = CLI_SUBAGENT_MIN_RESIZABLE_WIDTH;
 // CLI agent 浮窗的最小高度，保留一行以上内容和拖拽命中区域。
 const MIN_RESIZABLE_HEIGHT: f32 = 40.0;
 // 横向缩放时给窗口边缘保留的少量可见宽度。
@@ -160,6 +161,23 @@ fn cli_subagent_append_history_exchange_id(
 /// 用户滚轮查看历史后，不再强制把整体对话滚回底部。
 fn cli_subagent_mark_conversation_scroll_manually_moved(is_pinned: &mut bool) {
     *is_pinned = false;
+}
+
+/// 根据滚轮方向更新贴底状态：已在底部继续向下滚动时保持 auto-scroll。
+fn cli_subagent_update_conversation_scroll_pin_after_wheel(
+    is_pinned: &mut bool,
+    vertical_delta: f32,
+) -> bool {
+    if *is_pinned && vertical_delta <= 0. {
+        return false;
+    }
+
+    if *is_pinned {
+        cli_subagent_mark_conversation_scroll_manually_moved(is_pinned);
+        return true;
+    }
+
+    false
 }
 
 /// 新一轮 exchange 追加时，默认恢复跟随最新内容。
@@ -1649,8 +1667,10 @@ impl View for CLISubagentView {
             .finish();
         let content = EventHandler::new(clipped_content)
             .with_always_handle()
-            .on_scroll_wheel(|ctx, _app, _, _| {
-                ctx.dispatch_typed_action(CLISubagentAction::ConversationScrollManuallyMoved);
+            .on_scroll_wheel(|ctx, _app, delta, _| {
+                ctx.dispatch_typed_action(CLISubagentAction::ConversationScrollWheel {
+                    vertical_delta: delta.y(),
+                });
                 cli_subagent_conversation_scroll_wheel_dispatch_result()
             })
             .finish();
@@ -1705,7 +1725,7 @@ pub enum CLISubagentAction {
     CopyOnSelect(String),
     CopyDebugId(String),
     OpenFeedbackDocs,
-    ConversationScrollManuallyMoved,
+    ConversationScrollWheel { vertical_delta: f32 },
 }
 
 impl TypedActionView for CLISubagentView {
@@ -1802,11 +1822,14 @@ impl TypedActionView for CLISubagentView {
             CLISubagentAction::OpenFeedbackDocs => {
                 ctx.open_url("");
             }
-            CLISubagentAction::ConversationScrollManuallyMoved => {
-                cli_subagent_mark_conversation_scroll_manually_moved(
+            CLISubagentAction::ConversationScrollWheel { vertical_delta } => {
+                let did_change = cli_subagent_update_conversation_scroll_pin_after_wheel(
                     &mut self.is_conversation_scroll_pinned_to_bottom,
+                    *vertical_delta,
                 );
-                ctx.notify();
+                if did_change {
+                    ctx.notify();
+                }
             }
         }
     }
@@ -2469,5 +2492,23 @@ mod tests {
             cli_subagent_conversation_scroll_wheel_dispatch_result(),
             DispatchEventResult::StopPropagation
         ));
+    }
+
+    #[test]
+    fn cli_subagent_conversation_scroll_keeps_pinned_when_confirming_bottom() {
+        let mut is_pinned = true;
+
+        cli_subagent_update_conversation_scroll_pin_after_wheel(&mut is_pinned, -1.);
+
+        assert!(is_pinned);
+    }
+
+    #[test]
+    fn cli_subagent_conversation_scroll_unpins_when_scrolling_up_from_bottom() {
+        let mut is_pinned = true;
+
+        cli_subagent_update_conversation_scroll_pin_after_wheel(&mut is_pinned, 1.);
+
+        assert!(!is_pinned);
     }
 }

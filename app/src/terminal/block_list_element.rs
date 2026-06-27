@@ -1,4 +1,5 @@
 use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
+use crate::ai::blocklist::block::cli::CLI_SUBAGENT_MIN_RESIZABLE_WIDTH;
 use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
 use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
 use crate::appearance::Appearance;
@@ -199,7 +200,7 @@ fn cli_subagent_layout_max_size(
     // 再交给 CLISubagentView 内部 Resizable 处理最终拖拽尺寸。
     let max_width = (available_size.x() * CLI_SUBAGENT_MAX_WIDTH_RATIO
         - CLI_SUBAGENT_HORIZONTAL_MARGIN)
-        .max(0.);
+        .max(CLI_SUBAGENT_MIN_RESIZABLE_WIDTH);
     let window_max_height = available_size.y() * CLI_SUBAGENT_MAX_HEIGHT_RATIO;
     let max_height = if is_agent_blocked {
         window_max_height
@@ -4904,7 +4905,15 @@ mod tests {
     fn cli_subagent_layout_max_size_does_not_go_negative() {
         assert_eq!(
             cli_subagent_layout_max_size(vec2f(4., 4.), 10., false),
-            vec2f(0., 0.)
+            vec2f(360., 0.)
+        );
+    }
+
+    #[test]
+    fn cli_subagent_layout_max_size_keeps_min_width_for_narrow_windows() {
+        assert_eq!(
+            cli_subagent_layout_max_size(vec2f(320., 700.), 300., true).x(),
+            360.
         );
     }
 }
