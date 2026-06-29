@@ -190,6 +190,55 @@ fn cli_subagent_conversation_scroll_wheel_dispatch_result() -> DispatchEventResu
     DispatchEventResult::StopPropagation
 }
 
+/// 统计 CLI 浮窗实际渲染的 output sections，供脱敏索引与 render 累计保持一致。
+fn cli_subagent_rendered_output_text_section_count(output: &AIAgentOutput) -> usize {
+    output
+        .messages
+        .iter()
+        .filter_map(|output_message| {
+            if let AIAgentOutputMessageType::Text(AIAgentText { sections }) =
+                &output_message.message
+            {
+                if !are_all_text_sections_empty(sections) {
+                    return Some(sections.len());
+                }
+            }
+
+            None
+        })
+        .sum()
+}
+
+/// 按 CLI 浮窗 render 顺序扫描可见 output，并返回参与索引累计的 section 数。
+fn cli_subagent_run_redaction_on_rendered_output(
+    secret_redaction_state: &mut SecretRedactionState,
+    output: &AIAgentOutput,
+    starting_section_index: usize,
+    should_obfuscate: bool,
+) -> usize {
+    let mut scanned_section_count = 0;
+
+    for output_message in output.messages.iter() {
+        if let AIAgentOutputMessageType::Text(AIAgentText { sections }) = &output_message.message {
+            if !are_all_text_sections_empty(sections) {
+                scanned_section_count += secret_redaction_state
+                    .run_redaction_on_text_sections_with_starting_section_index(
+                        sections,
+                        starting_section_index + scanned_section_count,
+                        should_obfuscate,
+                    );
+            }
+        }
+    }
+
+    debug_assert_eq!(
+        scanned_section_count,
+        cli_subagent_rendered_output_text_section_count(output)
+    );
+
+    scanned_section_count
+}
+
 lazy_static! {
     static ref ACCEPT_KEYSTROKE: Keystroke = Keystroke {
         key: "enter".to_owned(),
@@ -470,6 +519,7 @@ impl CLISubagentView {
                             me.table_section_handles = Default::default();
                             me.secret_redaction_state.reset();
                             me.set_state_from_updated_inputs(ctx);
+                            me.refresh_output_secret_redaction_state(ctx);
                         }
                         ctx.notify();
                     }
@@ -638,6 +688,7 @@ impl CLISubagentView {
             selected_text: Arc::new(RwLock::new(None)),
         };
         view.set_state_from_updated_inputs(ctx);
+        view.refresh_output_secret_redaction_state(ctx);
         view
     }
 
@@ -652,6 +703,44 @@ impl CLISubagentView {
             true
         } else {
             false
+        }
+    }
+
+    fn models_to_render_for_output_redaction(
+        &self,
+    ) -> Vec<Rc<dyn AIBlockModel<View = CLISubagentView>>> {
+        // history_models 非空时已经按 render 顺序包含最新 exchange；否则只渲染当前 model。
+        if self.history_models.is_empty() {
+            vec![self.model.clone()]
+        } else {
+            self.history_models.clone()
+        }
+    }
+
+    fn refresh_output_secret_redaction_state(&mut self, ctx: &mut ViewContext<Self>) {
+        let secret_redaction_mode = get_secret_obfuscation_mode(ctx);
+        let models_to_scan = self.models_to_render_for_output_redaction();
+
+        self.secret_redaction_state.clear_output_locations();
+        self.secret_redaction_state.reset();
+
+        if !secret_redaction_mode.should_redact_secret() {
+            return;
+        }
+
+        let should_obfuscate = secret_redaction_mode.is_visually_obfuscated();
+        let mut text_section_index = 0;
+
+        for model in models_to_scan {
+            if let Some(output) = model.status(ctx).output_to_render() {
+                let output = output.get();
+                text_section_index += cli_subagent_run_redaction_on_rendered_output(
+                    &mut self.secret_redaction_state,
+                    &output,
+                    text_section_index,
+                    should_obfuscate,
+                );
+            }
         }
     }
 
@@ -826,30 +915,39 @@ impl CLISubagentView {
         ctx: &mut ViewContext<Self>,
     ) {
         if self.model.exchange_id(ctx) != Some(exchange_id) {
+            self.refresh_output_secret_redaction_state(ctx);
             ctx.notify();
             return;
         }
 
         match self.model.status(ctx) {
             AIBlockOutputStatus::Pending => {
-                self.secret_redaction_state.reset();
+                self.refresh_output_secret_redaction_state(ctx);
             }
             AIBlockOutputStatus::PartiallyReceived { output } => {
                 let output = output.get();
                 self.handle_updated_output(&output, ctx);
+                self.refresh_output_secret_redaction_state(ctx);
             }
             AIBlockOutputStatus::Complete { output } => {
                 let output = output.get();
                 self.handle_updated_output(&output, ctx);
-                self.handle_complete_output(&output, ctx);
+                self.refresh_output_secret_redaction_state(ctx);
             }
             AIBlockOutputStatus::Cancelled { partial_output, .. } => {
                 if let Some(output) = partial_output.as_ref() {
                     let output = output.get();
                     self.handle_updated_output(&output, ctx);
                 }
+                self.refresh_output_secret_redaction_state(ctx);
             }
-            AIBlockOutputStatus::Failed { .. } => (),
+            AIBlockOutputStatus::Failed { partial_output, .. } => {
+                if let Some(output) = partial_output.as_ref() {
+                    let output = output.get();
+                    self.handle_updated_output(&output, ctx);
+                }
+                self.refresh_output_secret_redaction_state(ctx);
+            }
         }
         ctx.notify();
     }
@@ -871,14 +969,6 @@ impl CLISubagentView {
             .for_each(|(index, (code, language, source))| {
                 self.handle_code_section_stream_update(index, code, language, source, ctx);
             });
-
-        if get_secret_obfuscation_mode(ctx).should_redact_secret() {
-            self.secret_redaction_state
-                .run_incremental_redaction_on_partial_output(
-                    output,
-                    get_secret_obfuscation_mode(ctx).is_visually_obfuscated(),
-                );
-        }
     }
 
     fn handle_code_section_stream_update(
@@ -986,16 +1076,6 @@ impl CLISubagentView {
                 });
                 self.code_editor_buttons.push(Default::default());
             }
-        }
-    }
-
-    fn handle_complete_output(&mut self, output: &AIAgentOutput, ctx: &mut ViewContext<Self>) {
-        // Run secret detection at the end of the stream to catch any secrets we might've missed while streaming,
-        // due to secret patterns that may include whitespace within them (we delimit on whitespace with the optimized
-        // secret detection approach).
-        if get_secret_obfuscation_mode(ctx).is_visually_obfuscated() {
-            self.secret_redaction_state
-                .run_redaction_on_complete_output(output);
         }
     }
 
@@ -2412,6 +2492,38 @@ fn render_blocked_action(props: BlockedActionProps<'_>, app: &AppContext) -> Box
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::agent::{AIAgentOutputMessage, AgentOutputText, MessageId};
+
+    fn cli_subagent_test_text_output(
+        message_id: &str,
+        sections: Vec<AIAgentTextSection>,
+    ) -> AIAgentOutput {
+        AIAgentOutput {
+            messages: vec![AIAgentOutputMessage::text(
+                MessageId::new(message_id.to_string()),
+                AIAgentText { sections },
+            )],
+            ..Default::default()
+        }
+    }
+
+    fn cli_subagent_test_reasoning_message(message_id: &str) -> AIAgentOutputMessage {
+        AIAgentOutputMessage::reasoning(
+            MessageId::new(message_id.to_string()),
+            AIAgentText {
+                sections: vec![AIAgentTextSection::PlainText {
+                    text: AgentOutputText::from("hidden reasoning".to_string()),
+                }],
+            },
+            None,
+        )
+    }
+
+    fn cli_subagent_test_plain_text_section(text: &str) -> AIAgentTextSection {
+        AIAgentTextSection::PlainText {
+            text: AgentOutputText::from(text.to_string()),
+        }
+    }
 
     #[test]
     fn cli_subagent_resize_width_bounds_allow_nearly_full_window() {
@@ -2466,6 +2578,45 @@ mod tests {
         ));
 
         assert_eq!(exchange_ids, vec![exchange_id]);
+    }
+
+    #[test]
+    fn cli_subagent_output_redaction_section_count_matches_rendered_text_messages() {
+        let mut output = cli_subagent_test_text_output(
+            "message-1",
+            vec![
+                cli_subagent_test_plain_text_section("first"),
+                cli_subagent_test_plain_text_section("second"),
+            ],
+        );
+        output
+            .messages
+            .push(cli_subagent_test_reasoning_message("reasoning-message"));
+
+        assert_eq!(cli_subagent_rendered_output_text_section_count(&output), 2);
+    }
+
+    #[test]
+    fn cli_subagent_output_redaction_section_indices_accumulate_across_history() {
+        let history_output = cli_subagent_test_text_output(
+            "history-message",
+            vec![
+                cli_subagent_test_plain_text_section("history 1"),
+                cli_subagent_test_plain_text_section("history 2"),
+            ],
+        );
+        let latest_output = cli_subagent_test_text_output(
+            "latest-message",
+            vec![cli_subagent_test_plain_text_section("latest")],
+        );
+        let history_start_index = 0;
+        let latest_start_index =
+            history_start_index + cli_subagent_rendered_output_text_section_count(&history_output);
+        let final_section_index =
+            latest_start_index + cli_subagent_rendered_output_text_section_count(&latest_output);
+
+        assert_eq!(latest_start_index, 2);
+        assert_eq!(final_section_index, 3);
     }
 
     #[test]

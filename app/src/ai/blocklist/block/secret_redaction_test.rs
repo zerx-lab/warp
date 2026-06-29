@@ -3,9 +3,47 @@ use serial_test::serial;
 use warpui::elements::Text;
 use warpui::fonts::FamilyId;
 
+use crate::ai::agent::{AIAgentOutputMessage, AIAgentText, MessageId};
 use crate::terminal::model::secrets::{self, SecretLevel};
 
 use super::*;
+
+fn text_output(message_id: &str, sections: Vec<&str>) -> AIAgentOutput {
+    AIAgentOutput {
+        messages: vec![AIAgentOutputMessage::text(
+            MessageId::new(message_id.to_string()),
+            AIAgentText {
+                sections: sections
+                    .into_iter()
+                    .map(|text| AIAgentTextSection::PlainText {
+                        text: text.to_string().into(),
+                    })
+                    .collect(),
+            },
+        )],
+        ..Default::default()
+    }
+}
+
+fn detected_secret_texts_at(
+    state: &SecretRedactionState,
+    section_index: usize,
+    line_index: usize,
+) -> Vec<String> {
+    state
+        .secrets_for_location(&TextLocation::Output {
+            section_index,
+            line_index,
+        })
+        .map(|detected| {
+            detected
+                .detected_secrets
+                .values()
+                .map(|secret| secret.secret.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 #[test]
 fn test_merge_no_ranges() {
@@ -480,6 +518,61 @@ fn test_add_secret_redaction_to_text_with_multibyte_characters() {
 
     // The secret should be replaced with asterisks.
     assert_eq!(result.text(), "这是一个秘密: 密*****.");
+}
+
+#[test]
+#[serial]
+fn test_output_redaction_respects_starting_section_index() {
+    secrets::set_user_and_enterprise_secret_regexes(
+        [&Regex::new("FIRST_SECRET").expect("Should be able to construct regex")],
+        std::iter::empty(),
+    );
+    let output = text_output("message-1", vec!["safe section", "token FIRST_SECRET"]);
+    let mut state = SecretRedactionState::default();
+
+    let section_count = state.run_redaction_on_output_with_starting_section_index(&output, 4, true);
+
+    assert_eq!(section_count, 2);
+    assert_eq!(
+        detected_secret_texts_at(&state, 5, 0),
+        vec!["FIRST_SECRET".to_string()]
+    );
+    assert!(detected_secret_texts_at(&state, 1, 0).is_empty());
+}
+
+#[test]
+#[serial]
+fn test_output_redaction_keeps_history_and_latest_sections_separate() {
+    secrets::set_user_and_enterprise_secret_regexes(
+        [&Regex::new("FIRST_SECRET|SECOND_SECRET").expect("Should be able to construct regex")],
+        std::iter::empty(),
+    );
+    let history_output = text_output("history-message", vec!["old FIRST_SECRET"]);
+    let latest_output = text_output("latest-message", vec!["plain latest", "new SECOND_SECRET"]);
+    let mut state = SecretRedactionState::default();
+    let mut text_section_index = 0;
+
+    text_section_index += state.run_redaction_on_output_with_starting_section_index(
+        &history_output,
+        text_section_index,
+        true,
+    );
+    text_section_index += state.run_redaction_on_output_with_starting_section_index(
+        &latest_output,
+        text_section_index,
+        true,
+    );
+
+    assert_eq!(text_section_index, 3);
+    assert_eq!(
+        detected_secret_texts_at(&state, 0, 0),
+        vec!["FIRST_SECRET".to_string()]
+    );
+    assert!(detected_secret_texts_at(&state, 1, 0).is_empty());
+    assert_eq!(
+        detected_secret_texts_at(&state, 2, 0),
+        vec!["SECOND_SECRET".to_string()]
+    );
 }
 
 // Test case-sensitive matching by default
