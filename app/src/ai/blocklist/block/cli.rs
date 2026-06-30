@@ -1,9 +1,8 @@
 use parking_lot::{FairMutex, RwLock};
 use pathfinder_color::ColorU;
 use settings::Setting as _;
-use std::sync::Arc;
 use std::time::Duration;
-use std::{cmp::Ordering, rc::Rc};
+use std::{cell::RefCell, cmp::Ordering, rc::Rc, sync::Arc};
 use warp_core::features::FeatureFlag;
 use warp_core::report_error;
 use warp_core::ui::theme::color::internal_colors;
@@ -18,6 +17,7 @@ use warpui::elements::{
 use warpui::fonts::Weight;
 use warpui::platform::{Cursor, OperatingSystem};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::units::IntoPixels;
 
 use lazy_static::lazy_static;
 use pathfinder_geometry::vector::vec2f;
@@ -185,6 +185,20 @@ fn cli_subagent_mark_conversation_scroll_should_follow_latest(is_pinned: &mut bo
     *is_pinned = true;
 }
 
+/// 切换响应可见性时保存或恢复对话滚动位置。
+fn cli_subagent_response_visibility_scroll_offset(
+    current_scroll_offset: f32,
+    should_hide_responses: bool,
+    saved_scroll_offset: &mut Option<f32>,
+) -> Option<f32> {
+    if should_hide_responses {
+        *saved_scroll_offset = Some(current_scroll_offset);
+        None
+    } else {
+        saved_scroll_offset.take()
+    }
+}
+
 /// 浮窗内滚轮事件只消费在整体对话窗口中，避免继续带动外层终端滚动。
 fn cli_subagent_conversation_scroll_wheel_dispatch_result() -> DispatchEventResult {
     DispatchEventResult::StopPropagation
@@ -312,14 +326,75 @@ pub fn init(app: &mut AppContext) {
     )]);
 }
 
+type SelectionHandleList = Rc<RefCell<Vec<SelectionHandle>>>;
+
+#[derive(Clone, Copy)]
+enum SelectionHandleGroup {
+    Query,
+    Output,
+    Action,
+}
+
+/// 按渲染项索引获取独立的选择状态，避免多个气泡共用同一套划词范围。
+fn selection_handle_for_index(handles: &SelectionHandleList, index: usize) -> SelectionHandle {
+    let mut handles = handles.borrow_mut();
+    while handles.len() <= index {
+        handles.push(SelectionHandle::default());
+    }
+    handles[index].clone()
+}
+
+/// 清理同一浮窗内一组可选区域的所有划词状态。
+fn clear_selection_handles(handles: &SelectionHandleList) {
+    for handle in handles.borrow().iter() {
+        handle.clear();
+    }
+}
+
+/// 清理同组其它可选区域，保留当前正在产生选择的区域。
+fn clear_selection_handles_except(handles: &SelectionHandleList, selected_index: usize) {
+    for (index, handle) in handles.borrow().iter().enumerate() {
+        if index != selected_index {
+            handle.clear();
+        }
+    }
+}
+
+/// 开始在一个可选区域内划词时，清掉其它同级区域的旧选择状态。
+fn clear_selection_handles_for_active_area(
+    query_selection_handles: &SelectionHandleList,
+    output_selection_handles: &SelectionHandleList,
+    action_selection_handles: &SelectionHandleList,
+    active_group: SelectionHandleGroup,
+    active_index: usize,
+) {
+    match active_group {
+        SelectionHandleGroup::Query => {
+            clear_selection_handles_except(query_selection_handles, active_index);
+            clear_selection_handles(output_selection_handles);
+            clear_selection_handles(action_selection_handles);
+        }
+        SelectionHandleGroup::Output => {
+            clear_selection_handles(query_selection_handles);
+            clear_selection_handles_except(output_selection_handles, active_index);
+            clear_selection_handles(action_selection_handles);
+        }
+        SelectionHandleGroup::Action => {
+            clear_selection_handles(query_selection_handles);
+            clear_selection_handles(output_selection_handles);
+            clear_selection_handles_except(action_selection_handles, active_index);
+        }
+    }
+}
+
 #[derive(Default)]
 struct StateHandles {
     invalid_api_key_button_handle: MouseStateHandle,
     debug_copy_button_handle: MouseStateHandle,
     submit_issue_button_handle: MouseStateHandle,
-    query_selection_handle: SelectionHandle,
-    output_selection_handle: SelectionHandle,
-    action_selection_handle: SelectionHandle,
+    query_selection_handles: SelectionHandleList,
+    output_selection_handles: SelectionHandleList,
+    action_selection_handles: SelectionHandleList,
     speedbump_checkbox_handle: MouseStateHandle,
     ai_settings_link: HighlightedHyperlink,
     conversation_scroll_state: ClippedScrollStateHandle,
@@ -359,6 +434,8 @@ pub struct CLISubagentView {
     always_allow_read_files_checked: bool,
     // 整体对话滚动是否仍跟随最新输出；用户手动滚轮查看历史后会关闭。
     is_conversation_scroll_pinned_to_bottom: bool,
+    // Hide responses 会让滚动内容变短并被 scrollable 裁剪到顶部；这里记录隐藏前的位置用于显示时恢复。
+    hidden_response_scroll_offset: Option<f32>,
 
     is_input_dismissed: bool,
     input_dismiss_timer_handle: Option<SpawnedFutureHandle>,
@@ -656,6 +733,25 @@ impl CLISubagentView {
                 }
             }
             CLISubagentEvent::ToggledHideResponses => {
+                let should_hide_responses = me
+                    .terminal_model
+                    .lock()
+                    .block_list()
+                    .block_with_id(&me.block_id)
+                    .is_some_and(|block| block.should_hide_responses());
+                let restored_scroll_offset = cli_subagent_response_visibility_scroll_offset(
+                    me.state_handles
+                        .conversation_scroll_state
+                        .scroll_start()
+                        .as_f32(),
+                    should_hide_responses,
+                    &mut me.hidden_response_scroll_offset,
+                );
+                if let Some(scroll_offset) = restored_scroll_offset {
+                    me.state_handles
+                        .conversation_scroll_state
+                        .scroll_to(scroll_offset.into_pixels());
+                }
                 me.reset_input_dismiss_timer(ctx);
                 ctx.notify();
             }
@@ -687,6 +783,7 @@ impl CLISubagentView {
             always_allow_write_to_pty_checked,
             always_allow_read_files_checked,
             is_conversation_scroll_pinned_to_bottom: true,
+            hidden_response_scroll_offset: None,
             is_input_dismissed: false,
             input_dismiss_timer_handle: None,
             resizable_width: resizable_state_handle(MIN_RESIZABLE_WIDTH),
@@ -1178,9 +1275,9 @@ impl CLISubagentView {
     /// Clears text selections at the `CLISubagentView` level (e.g. user query text).
     /// This does _not_ clear the selection of the child views (code blocks).
     fn clear_view_level_selection(&mut self) {
-        self.state_handles.query_selection_handle.clear();
-        self.state_handles.output_selection_handle.clear();
-        self.state_handles.action_selection_handle.clear();
+        clear_selection_handles(&self.state_handles.query_selection_handles);
+        clear_selection_handles(&self.state_handles.output_selection_handles);
+        clear_selection_handles(&self.state_handles.action_selection_handles);
         *self.selected_text.write() = None;
     }
 
@@ -1280,6 +1377,7 @@ impl View for CLISubagentView {
             self.history_models.iter().collect::<Vec<_>>()
         };
         let mut rendered_query_index = 0;
+        let mut rendered_output_index = 0;
         let mut text_section_index = 0;
         let model_count = models_to_render.len();
 
@@ -1293,6 +1391,10 @@ impl View for CLISubagentView {
                 if let AIAgentInput::UserQuery { query, .. } = input {
                     let input_index = rendered_query_index;
                     rendered_query_index += 1;
+                    let query_selection_handle = selection_handle_for_index(
+                        &self.state_handles.query_selection_handles,
+                        input_index,
+                    );
                     let text = render_query_text(
                         UserQueryProps {
                             text: query.to_owned(),
@@ -1300,7 +1402,7 @@ impl View for CLISubagentView {
                             detected_links_state: &self.link_detection_state,
                             secret_redaction_state: &self.secret_redaction_state,
                             input_index,
-                            is_selecting: self.state_handles.query_selection_handle.is_selecting(),
+                            is_selecting: query_selection_handle.is_selecting(),
                             is_ai_input_enabled: false,
                             find_context: None,
                             font_properties: &Properties {
@@ -1312,24 +1414,43 @@ impl View for CLISubagentView {
                     );
 
                     let selected_text = self.selected_text.clone();
-                    let output_selection_handle =
-                        self.state_handles.output_selection_handle.clone();
-                    let action_selection_handle =
-                        self.state_handles.action_selection_handle.clone();
+                    let query_selection_handles =
+                        self.state_handles.query_selection_handles.clone();
+                    let output_selection_handles =
+                        self.state_handles.output_selection_handles.clone();
+                    let action_selection_handles =
+                        self.state_handles.action_selection_handles.clone();
+                    // 克隆一份本区域句柄进闭包，判断"本区域是否真的在参与选择"。
+                    // Flex 会把同一鼠标事件广播给所有兄弟 SelectableArea，未命中的气泡也会触发本回调，
+                    // 此时不能用未命中的回调去清掉真正命中区域的划词状态。
+                    let query_selection_handle_clone = query_selection_handle.clone();
                     let mut selectable_text = SelectableArea::new(
-                        self.state_handles.query_selection_handle.clone(),
+                        query_selection_handle,
                         move |selection_args, ctx, _| {
-                            if let Some(selection) = selection_args
-                                .selection
-                                .filter(|selection| !selection.is_empty())
+                            let selection = selection_args.selection;
+                            // 只有本区域确实参与选择时（正在 selecting 或已产生非空选中文本），
+                            // 才清掉其它同级区域的旧选择；未命中广播则保持原状。
+                            let is_this_area_active = query_selection_handle_clone.is_selecting()
+                                || selection.as_ref().is_some_and(|s| !s.is_empty());
+                            if is_this_area_active {
+                                clear_selection_handles_for_active_area(
+                                    &query_selection_handles,
+                                    &output_selection_handles,
+                                    &action_selection_handles,
+                                    SelectionHandleGroup::Query,
+                                    input_index,
+                                );
+                            }
+                            if let Some(selection) =
+                                selection.filter(|selection| !selection.is_empty())
                             {
-                                output_selection_handle.clear();
-                                action_selection_handle.clear();
                                 ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
                                     selection.clone(),
                                 ));
                                 *selected_text.write() = Some(selection);
                                 ctx.dispatch_typed_action(CLISubagentAction::SelectText);
+                            } else if is_this_area_active {
+                                *selected_text.write() = None;
                             }
                         },
                         text.finish(),
@@ -1382,6 +1503,11 @@ impl View for CLISubagentView {
             } else {
                 None
             };
+            let output_index = rendered_output_index;
+            let output_selection_handle = selection_handle_for_index(
+                &self.state_handles.output_selection_handles,
+                output_index,
+            );
 
             if let Some(output) = status.output_to_render() {
                 let output = output.get();
@@ -1412,10 +1538,7 @@ impl View for CLISubagentView {
                                     starting_table_section_index: &mut table_section_index,
                                     starting_image_section_index: &mut image_section_index,
                                     sections,
-                                    is_selecting_text: self
-                                        .state_handles
-                                        .output_selection_handle
-                                        .is_selecting(),
+                                    is_selecting_text: output_selection_handle.is_selecting(),
                                     selectable: true,
                                     text_color,
                                     is_ai_input_enabled: false,
@@ -1568,22 +1691,39 @@ impl View for CLISubagentView {
 
             if !output_items.is_empty() && !should_hide_responses {
                 let selected_text = self.selected_text.clone();
-                let query_selection_handle = self.state_handles.query_selection_handle.clone();
-                let action_selection_handle = self.state_handles.action_selection_handle.clone();
+                let query_selection_handles = self.state_handles.query_selection_handles.clone();
+                let output_selection_handles = self.state_handles.output_selection_handles.clone();
+                let action_selection_handles = self.state_handles.action_selection_handles.clone();
+                // 克隆一份本区域的句柄进闭包，用于判断"本区域是否真的在参与选择"。
+                // Flex 会把同一鼠标事件广播给所有兄弟 SelectableArea，未命中的气泡也会触发本回调，
+                // 此时不能用未命中的回调去清掉真正命中区域的划词状态。
+                let output_selection_handle_clone = output_selection_handle.clone();
                 let mut output = SelectableArea::new(
-                    self.state_handles.output_selection_handle.clone(),
+                    output_selection_handle.clone(),
                     move |selection_args, ctx, _| {
-                        if let Some(selection) = selection_args
-                            .selection
-                            .filter(|selection| !selection.is_empty())
+                        let selection = selection_args.selection;
+                        // 只有本区域确实参与选择时（正在 selecting 或已产生非空选中文本），
+                        // 才清掉其它同级区域的旧选择；未命中广播则保持原状。
+                        let is_this_area_active = output_selection_handle_clone.is_selecting()
+                            || selection.as_ref().is_some_and(|s| !s.is_empty());
+                        if is_this_area_active {
+                            clear_selection_handles_for_active_area(
+                                &query_selection_handles,
+                                &output_selection_handles,
+                                &action_selection_handles,
+                                SelectionHandleGroup::Output,
+                                output_index,
+                            );
+                        }
+                        if let Some(selection) = selection.filter(|selection| !selection.is_empty())
                         {
-                            query_selection_handle.clear();
-                            action_selection_handle.clear();
                             ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
                                 selection.clone(),
                             ));
                             *selected_text.write() = Some(selection);
                             ctx.dispatch_typed_action(CLISubagentAction::SelectText);
+                        } else if is_this_area_active {
+                            *selected_text.write() = None;
                         }
                     },
                     output_items.finish(),
@@ -1604,6 +1744,7 @@ impl View for CLISubagentView {
                     .with_margin_bottom(8.)
                     .finish(),
                 );
+                rendered_output_index += 1;
             }
 
             if let Some(rendered_action) = blocked_action.and_then(|action| match action.action {
@@ -1684,23 +1825,44 @@ impl View for CLISubagentView {
                 )),
                 _ => None,
             }) {
+                let action_selection_handle = selection_handle_for_index(
+                    &self.state_handles.action_selection_handles,
+                    model_index,
+                );
                 let selected_text = self.selected_text.clone();
-                let query_selection_handle = self.state_handles.query_selection_handle.clone();
-                let output_selection_handle = self.state_handles.output_selection_handle.clone();
+                let query_selection_handles = self.state_handles.query_selection_handles.clone();
+                let output_selection_handles = self.state_handles.output_selection_handles.clone();
+                let action_selection_handles = self.state_handles.action_selection_handles.clone();
+                // 克隆一份本区域句柄进闭包，判断"本区域是否真的在参与选择"。
+                // Flex 会把同一鼠标事件广播给所有兄弟 SelectableArea，未命中的气泡也会触发本回调，
+                // 此时不能用未命中的回调去清掉真正命中区域的划词状态。
+                let action_selection_handle_clone = action_selection_handle.clone();
                 let mut selectable_action = SelectableArea::new(
-                    self.state_handles.action_selection_handle.clone(),
+                    action_selection_handle,
                     move |selection_args, ctx, _| {
-                        if let Some(selection) = selection_args
-                            .selection
-                            .filter(|selection| !selection.is_empty())
+                        let selection = selection_args.selection;
+                        // 只有本区域确实参与选择时（正在 selecting 或已产生非空选中文本），
+                        // 才清掉其它同级区域的旧选择；未命中广播则保持原状。
+                        let is_this_area_active = action_selection_handle_clone.is_selecting()
+                            || selection.as_ref().is_some_and(|s| !s.is_empty());
+                        if is_this_area_active {
+                            clear_selection_handles_for_active_area(
+                                &query_selection_handles,
+                                &output_selection_handles,
+                                &action_selection_handles,
+                                SelectionHandleGroup::Action,
+                                model_index,
+                            );
+                        }
+                        if let Some(selection) = selection.filter(|selection| !selection.is_empty())
                         {
-                            query_selection_handle.clear();
-                            output_selection_handle.clear();
                             ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
                                 selection.clone(),
                             ));
                             *selected_text.write() = Some(selection);
                             ctx.dispatch_typed_action(CLISubagentAction::SelectText);
+                        } else if is_this_area_active {
+                            *selected_text.write() = None;
                         }
                     },
                     rendered_action,
@@ -2504,6 +2666,7 @@ fn render_blocked_action(props: BlockedActionProps<'_>, app: &AppContext) -> Box
 mod tests {
     use super::*;
     use crate::ai::agent::{AIAgentOutputMessage, AgentOutputText, MessageId};
+    use warpui::{elements::SelectionBound, text::SelectionType};
 
     fn cli_subagent_test_text_output(
         message_id: &str,
@@ -2554,6 +2717,47 @@ mod tests {
     #[test]
     fn cli_subagent_resize_height_bounds_do_not_drop_below_panel_minimum() {
         assert_eq!(cli_subagent_height_bounds(50.0), (40.0, 40.0));
+    }
+
+    #[test]
+    fn cli_subagent_selection_handles_clear_other_items_only() {
+        let handles = SelectionHandleList::default();
+        let first_handle = selection_handle_for_index(&handles, 0);
+        let second_handle = selection_handle_for_index(&handles, 1);
+
+        first_handle.start_selection_outside(SelectionBound::TopLeft, SelectionType::Simple);
+        second_handle.start_selection_outside(SelectionBound::TopLeft, SelectionType::Simple);
+
+        clear_selection_handles_except(&handles, 1);
+
+        assert!(!first_handle.is_selecting());
+        assert!(second_handle.is_selecting());
+    }
+
+    #[test]
+    fn cli_subagent_active_selection_clears_peer_groups() {
+        let query_handles = SelectionHandleList::default();
+        let output_handles = SelectionHandleList::default();
+        let action_handles = SelectionHandleList::default();
+        let query_handle = selection_handle_for_index(&query_handles, 0);
+        let output_handle = selection_handle_for_index(&output_handles, 0);
+        let action_handle = selection_handle_for_index(&action_handles, 0);
+
+        query_handle.start_selection_outside(SelectionBound::TopLeft, SelectionType::Simple);
+        output_handle.start_selection_outside(SelectionBound::TopLeft, SelectionType::Simple);
+        action_handle.start_selection_outside(SelectionBound::TopLeft, SelectionType::Simple);
+
+        clear_selection_handles_for_active_area(
+            &query_handles,
+            &output_handles,
+            &action_handles,
+            SelectionHandleGroup::Output,
+            0,
+        );
+
+        assert!(!query_handle.is_selecting());
+        assert!(output_handle.is_selecting());
+        assert!(!action_handle.is_selecting());
     }
 
     #[test]
@@ -2646,6 +2850,23 @@ mod tests {
         cli_subagent_mark_conversation_scroll_should_follow_latest(&mut is_pinned);
 
         assert!(is_pinned);
+    }
+
+    #[test]
+    fn cli_subagent_response_visibility_restores_saved_scroll_offset() {
+        let mut saved_scroll_offset = None;
+
+        let restored_scroll_offset =
+            cli_subagent_response_visibility_scroll_offset(120.0, true, &mut saved_scroll_offset);
+
+        assert_eq!(saved_scroll_offset, Some(120.0));
+        assert_eq!(restored_scroll_offset, None);
+
+        let restored_scroll_offset =
+            cli_subagent_response_visibility_scroll_offset(0.0, false, &mut saved_scroll_offset);
+
+        assert_eq!(saved_scroll_offset, None);
+        assert_eq!(restored_scroll_offset, Some(120.0));
     }
 
     #[test]
