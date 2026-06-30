@@ -860,15 +860,25 @@ impl View for AIBlock {
                     context_references,
                 ))
             });
-        let query_and_index_is_some =
-            query_and_index.is_some() && !should_hide_first_block_query_and_header;
+        let should_hide_responses = {
+            let terminal_model = self.terminal_model.lock();
+            terminal_model
+                .block_list()
+                .active_block()
+                .should_hide_responses()
+        };
+        let should_render_query_and_header = common::should_render_query_and_header(
+            query_and_index.is_some(),
+            should_hide_first_block_query_and_header,
+            should_hide_responses,
+        );
         let attachment_name_list = if FeatureFlag::ImageAsContext.is_enabled() {
             attachment_names(self.model.inputs_to_render(app))
         } else {
             vec![]
         };
 
-        if !should_hide_first_block_query_and_header {
+        if should_render_query_and_header {
             if let Some((
                 query_for_display,
                 input_index,
@@ -1105,7 +1115,7 @@ impl View for AIBlock {
         // For example, consider a query that results in a requested command. We want the second
         // block (where requested command output is the AI input) to appear part of the original
         // query block.
-        let contains_user_query_and_is_not_pin_to_top = query_and_index_is_some
+        let contains_user_query_and_is_not_pin_to_top = should_render_query_and_header
             || InputModeSettings::as_ref(app)
                 .input_mode
                 .value()

@@ -12,9 +12,9 @@ use super::{
     collect_visual_markdown_lightbox_collection, compute_visual_section_width,
     display_query_without_context_references, inline_image_source_label,
     is_supported_blocklist_image_source, lightbox_trigger_for_section, query_context_references,
-    query_prefix_highlight_len, render_scrollable_collapsible_content, text_sections_with_indices,
-    CollapsibleElementState, CollapsibleExpansionState, QueryContextReference,
-    VisualMarkdownLightboxCollection,
+    query_prefix_highlight_len, render_scrollable_collapsible_content,
+    should_render_query_and_header, text_sections_with_indices, CollapsibleElementState,
+    CollapsibleExpansionState, QueryContextReference, VisualMarkdownLightboxCollection,
 };
 use crate::{
     ai::agent::{
@@ -114,6 +114,16 @@ fn query_context_references_only_returns_real_at_attachments() {
             icon: Icon::AtSign,
         }]
     );
+}
+
+#[test]
+fn should_render_query_and_header_hides_query_when_responses_are_hidden() {
+    assert!(!should_render_query_and_header(true, false, true));
+}
+
+#[test]
+fn should_render_query_and_header_keeps_query_when_responses_are_visible() {
+    assert!(should_render_query_and_header(true, false, false));
 }
 
 #[test]

@@ -26,11 +26,11 @@ use warpui::{
         new_scrollable::{ScrollableAppearance, SingleAxisConfig},
         Align, Axis, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
         ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Empty,
-        EventHandler, Expanded, Fill, Flex, FormattedTextElement,
-        Hoverable, Image as WarpImage, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-        NewScrollable, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-        SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Table,
-        TableColumnWidth, TableConfig, TableHeader, TableVerticalSizing, Text, Wrap,
+        EventHandler, Expanded, Fill, Flex, FormattedTextElement, Hoverable, Image as WarpImage,
+        MainAxisAlignment, MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning,
+        ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget,
+        ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Table, TableColumnWidth,
+        TableConfig, TableHeader, TableVerticalSizing, Text, Wrap,
     },
     fonts::{Properties, Weight},
     image_cache::{CacheOption, ImageType},
@@ -3455,6 +3455,18 @@ pub(super) fn query_prefix_highlight_len(
             | AIAgentInput::PassiveSuggestionResult { .. } => None,
         }
     }
+}
+
+/// 决定当前 block 的用户提问气泡是否应该渲染出来。
+///
+/// 当 "Hide responses" 开启时，这里也要一起隐藏提问本身，避免界面只藏输出
+/// 不藏输入，造成用户看到残留的发送内容。
+pub(super) fn should_render_query_and_header(
+    query_and_index_is_some: bool,
+    should_hide_first_block_query_and_header: bool,
+    should_hide_responses: bool,
+) -> bool {
+    query_and_index_is_some && !should_hide_first_block_query_and_header && !should_hide_responses
 }
 
 pub(super) fn query_context_references(
