@@ -190,6 +190,14 @@ fn cli_subagent_conversation_scroll_wheel_dispatch_result() -> DispatchEventResu
     DispatchEventResult::StopPropagation
 }
 
+/// 判断 CLI 浮窗中的用户输入气泡是否应该渲染。
+fn cli_subagent_should_render_user_input(
+    should_hide_responses: bool,
+    is_input_dismissed: bool,
+) -> bool {
+    !should_hide_responses && !is_input_dismissed
+}
+
 /// 统计 CLI 浮窗实际渲染的 output sections，供脱敏索引与 render 累计保持一致。
 fn cli_subagent_rendered_output_text_section_count(output: &AIAgentOutput) -> usize {
     output
@@ -1277,6 +1285,7 @@ impl View for CLISubagentView {
 
         for (model_index, model) in models_to_render.into_iter().enumerate() {
             let is_latest_model = model_index + 1 == model_count;
+            let should_hide_responses = block.should_hide_responses();
 
             // Render user queries/follow-ups with avatar and interactive text
             let inputs = model.inputs_to_render(app);
@@ -1353,7 +1362,10 @@ impl View for CLISubagentView {
                         app,
                     );
 
-                    if !self.is_input_dismissed {
+                    if cli_subagent_should_render_user_input(
+                        should_hide_responses,
+                        self.is_input_dismissed,
+                    ) {
                         conversation_items.add_child(dismissable_stack);
                     }
                 }
@@ -1370,7 +1382,6 @@ impl View for CLISubagentView {
             } else {
                 None
             };
-            let should_hide_responses = block.should_hide_responses();
 
             if let Some(output) = status.output_to_render() {
                 let output = output.get();
@@ -2643,6 +2654,21 @@ mod tests {
             cli_subagent_conversation_scroll_wheel_dispatch_result(),
             DispatchEventResult::StopPropagation
         ));
+    }
+
+    #[test]
+    fn cli_subagent_user_input_hidden_when_responses_are_hidden() {
+        assert!(!cli_subagent_should_render_user_input(true, false));
+    }
+
+    #[test]
+    fn cli_subagent_user_input_visible_when_responses_are_shown() {
+        assert!(cli_subagent_should_render_user_input(false, false));
+    }
+
+    #[test]
+    fn cli_subagent_user_input_hidden_after_manual_dismiss() {
+        assert!(!cli_subagent_should_render_user_input(false, true));
     }
 
     #[test]

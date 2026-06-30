@@ -805,6 +805,38 @@ pub enum VisibleItem {
     },
 }
 
+/// 按事件派发顺序返回当前可见的 RichContent 视图 ID。
+fn visible_rich_content_views_for_event_dispatch(
+    visible_items: Option<&[VisibleItem]>,
+) -> Vec<EntityId> {
+    let mut view_ids = Vec::new();
+
+    // 只收集可见的 RichContent，普通终端块和间隔不参与子视图事件派发。
+    let Some(visible_items) = visible_items else {
+        return view_ids;
+    };
+    // RichContent 按列表顺序绘制，越靠后的项越晚绘制；事件派发需要反向遍历，
+    // 这样发生重叠或命中范围贴边时，视觉上更靠上的 block 会先获得鼠标事件。
+    for item in visible_items.iter().rev() {
+        if let VisibleItem::RichContent { view_id, .. } = item {
+            view_ids.push(*view_id);
+        }
+    }
+
+    view_ids
+}
+
+/// 判断 RichContent 处理事件后是否应阻止事件继续落到其他 block 或终端文本。
+fn should_stop_after_rich_content_handles_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::LeftMouseDown { .. }
+            | Event::LeftMouseDragged { .. }
+            | Event::LeftMouseUp { .. }
+            | Event::RightMouseDown { .. }
+    )
+}
+
 impl VisibleItem {
     pub fn index(&self) -> TotalIndex {
         match self {
@@ -3064,21 +3096,9 @@ impl BlockListElement {
     /// filters for RichContent items only, and returns the corresponding
     /// view id for those that are visible.
     fn visible_rich_content_views(&self) -> Vec<EntityId> {
-        let mut result = Vec::new();
-
-        // If there are no visible items, return an empty vector
-        let Some(visible_items) = &self.visible_items else {
-            return result;
-        };
-
-        // Filter visible items for RichContent items and collect their view_ids
-        for item in visible_items.iter() {
-            if let VisibleItem::RichContent { view_id, .. } = item {
-                result.push(*view_id);
-            }
-        }
-
-        result
+        visible_rich_content_views_for_event_dispatch(
+            self.visible_items.as_ref().map(|items| items.as_slice()),
+        )
     }
 
     #[cfg(feature = "voice_input")]
@@ -4557,9 +4577,15 @@ impl Element for BlockListElement {
             // Its unclear if this should be the case for the hoverable toolbelt elements above.
             // That's an open product question.
             if self.pane_state.is_focused() {
+                let should_stop_after_rich_content_handles_event =
+                    should_stop_after_rich_content_handles_event(event.raw_event());
                 for view_id in self.visible_rich_content_views() {
                     if let Some(rich_content) = self.rich_content_elements.get_mut(&view_id) {
-                        handled |= rich_content.dispatch_event(event, ctx, app);
+                        let rich_content_handled = rich_content.dispatch_event(event, ctx, app);
+                        handled |= rich_content_handled;
+                        if rich_content_handled && should_stop_after_rich_content_handles_event {
+                            return true;
+                        }
                     }
                 }
             }
@@ -4876,6 +4902,84 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rich_content_event_dispatch_prefers_last_painted_item() {
+        let first_view_id = EntityId::from_usize(10);
+        let second_view_id = EntityId::from_usize(20);
+        let third_view_id = EntityId::from_usize(30);
+
+        let visible_items = vec![
+            VisibleItem::RichContent {
+                view_id: first_view_id,
+                height_px: 24.,
+                index: TotalIndex(0),
+            },
+            VisibleItem::Gap {
+                height_px: 4.,
+                index: TotalIndex(1),
+            },
+            VisibleItem::RichContent {
+                view_id: second_view_id,
+                height_px: 24.,
+                index: TotalIndex(2),
+            },
+            VisibleItem::RichContent {
+                view_id: third_view_id,
+                height_px: 24.,
+                index: TotalIndex(3),
+            },
+        ];
+
+        assert_eq!(
+            visible_rich_content_views_for_event_dispatch(Some(&visible_items)),
+            vec![third_view_id, second_view_id, first_view_id]
+        );
+    }
+
+    #[test]
+    fn rich_content_selection_mouse_events_stop_after_being_handled() {
+        let position = vec2f(4., 8.);
+        let modifiers = ModifiersState::default();
+
+        assert!(should_stop_after_rich_content_handles_event(
+            &Event::LeftMouseDown {
+                position,
+                modifiers,
+                click_count: 1,
+                is_first_mouse: false,
+            }
+        ));
+        assert!(should_stop_after_rich_content_handles_event(
+            &Event::LeftMouseDragged {
+                position,
+                modifiers,
+            }
+        ));
+        assert!(should_stop_after_rich_content_handles_event(
+            &Event::LeftMouseUp {
+                position,
+                modifiers,
+            }
+        ));
+        assert!(should_stop_after_rich_content_handles_event(
+            &Event::RightMouseDown {
+                position,
+                cmd: false,
+                shift: false,
+                click_count: 1,
+            }
+        ));
+
+        assert!(!should_stop_after_rich_content_handles_event(
+            &Event::MouseMoved {
+                position,
+                cmd: false,
+                shift: false,
+                is_synthetic: false,
+            }
+        ));
+    }
 
     #[test]
     fn cli_subagent_layout_max_size_allows_nearly_full_block_list_width() {
