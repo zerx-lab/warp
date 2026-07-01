@@ -74,7 +74,9 @@ use super::CLIAgent;
 #[cfg(feature = "local_fs")]
 use crate::ai::agent::{CurrentHead, DiffBase};
 use crate::ai::ambient_agents::{conversation_output_status_from_conversation, AmbientAgentTaskId};
-use crate::ai::blocklist::block::cli::{CLISubagentView, CLISubagentViewEvent};
+use crate::ai::blocklist::block::cli::{
+    CLISubagentView, CLISubagentViewEvent, CLISubagentViewMode,
+};
 use crate::ai::blocklist::block::cli_controller::{
     CLISubagentController, CLISubagentEvent, UserTakeOverReason,
 };
@@ -172,6 +174,7 @@ use warpui::{ViewHandle, WeakModelHandle};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 
+use crate::ai::agent::task::TaskId;
 #[cfg(any(test, feature = "integration_tests"))]
 use crate::ai::agent::UserQueryMode;
 use crate::ai::agent::{
@@ -5136,6 +5139,102 @@ impl TerminalView {
         ctx.notify();
     }
 
+    pub(super) fn create_cli_subagent_view(
+        &mut self,
+        block_id: BlockId,
+        conversation_id: AIConversationId,
+        task_id: TaskId,
+        mode: CLISubagentViewMode,
+        initial_requested_command_action_id: Option<&AIAgentActionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let is_live = mode == CLISubagentViewMode::Live;
+        let block_id_for_view = block_id.clone();
+        let task_id_for_view = task_id.clone();
+        let ai_action_model = self.ai_action_model.clone();
+        let cli_subagent_controller = self.cli_subagent_controller.clone();
+        let terminal_model = self.model.clone();
+        let current_working_directory = self.pwd();
+        let shell_launch_data = self.shell_launch_data_if_local(ctx);
+
+        let subagent_view = ctx.add_typed_action_view(move |ctx| match mode {
+            CLISubagentViewMode::Live => CLISubagentView::new(
+                block_id_for_view,
+                ai_action_model,
+                cli_subagent_controller,
+                terminal_model,
+                conversation_id,
+                task_id_for_view,
+                current_working_directory,
+                shell_launch_data,
+                ctx,
+            ),
+            CLISubagentViewMode::RestoredReadOnly => CLISubagentView::new_restored(
+                block_id_for_view,
+                ai_action_model,
+                cli_subagent_controller,
+                terminal_model,
+                conversation_id,
+                task_id_for_view,
+                current_working_directory,
+                shell_launch_data,
+                ctx,
+            ),
+        });
+        self.cli_subagent_views
+            .insert(block_id.clone(), subagent_view.clone());
+        log::info!(
+            "[byop-diag] cli_subagent_views.len()={} after insert",
+            self.cli_subagent_views.len()
+        );
+
+        ctx.subscribe_to_view(&subagent_view, |me, view, event, ctx| match event {
+            CLISubagentViewEvent::TextSelected => {
+                // CLI subagent 的文本选择不能和 block list / alt screen 选择并存，
+                // 先清掉终端侧选择，再交给统一的 rich content selection 逻辑收尾。
+                {
+                    let mut model = me.model.lock();
+                    model.block_list_mut().clear_selection();
+                    model.alt_screen_mut().clear_selection();
+                }
+                // 清理临时拖选状态，避免切换到 CLI subagent view 后仍残留旧选择视觉。
+                me.is_selecting = false;
+                me.block_text_selection_start_position = None;
+                me.clear_selected_text_except(Some(view.id()), ctx);
+                ctx.notify();
+            }
+            CLISubagentViewEvent::CopiedEmptyText => {
+                me.copy(ctx);
+            }
+            #[cfg(windows)]
+            CLISubagentViewEvent::WindowsCtrlC => {
+                me.ctrl_c(ctx);
+            }
+        });
+
+        if is_live {
+            if let Some(initial_requested_command_id) = initial_requested_command_action_id {
+                // live spawn 时，触发 CLI subagent 的那轮 AI block 只是桥接工具调用，
+                // 真正 UI 挂在 command block 上；移除它以保持 requested command 视觉连续。
+                if let Some(result_ai_block_id) = self.rich_content_views.iter().find_map(|view| {
+                    let ai_metadata = view.ai_block_metadata()?;
+                    ai_metadata
+                        .ai_block_handle
+                        .as_ref(ctx)
+                        .contains_action_result(initial_requested_command_id, ctx)
+                        .then_some(view.view_id())
+                }) {
+                    self.rich_content_views
+                        .retain(|rich_content| rich_content.view_id() != result_ai_block_id);
+                    self.model
+                        .lock()
+                        .block_list_mut()
+                        .remove_rich_content(result_ai_block_id);
+                }
+            }
+        }
+    }
+
     fn handle_cli_subagent_controller_event(
         &mut self,
         _: ModelHandle<CLISubagentController>,
@@ -5154,88 +5253,14 @@ impl TerminalView {
                      block_id={block_id:?} task_id={task_id:?} conv={conversation_id:?} \
                      → 创建 CLISubagentView 加进 cli_subagent_views map"
                 );
-                let subagent_view = ctx.add_typed_action_view(|ctx| {
-                    CLISubagentView::new(
-                        block_id.clone(),
-                        self.ai_action_model.clone(),
-                        self.cli_subagent_controller.clone(),
-                        self.model.clone(),
-                        *conversation_id,
-                        task_id.clone(),
-                        self.pwd(),
-                        self.shell_launch_data_if_local(ctx),
-                        ctx,
-                    )
-                });
-                self.cli_subagent_views
-                    .insert(block_id.clone(), subagent_view.clone());
-                log::info!(
-                    "[byop-diag] cli_subagent_views.len()={} after insert",
-                    self.cli_subagent_views.len()
+                self.create_cli_subagent_view(
+                    block_id.clone(),
+                    *conversation_id,
+                    task_id.clone(),
+                    CLISubagentViewMode::Live,
+                    initial_requested_command_action_id.as_ref(),
+                    ctx,
                 );
-
-                ctx.subscribe_to_view(&subagent_view, |me, view, event, ctx| match event {
-                    CLISubagentViewEvent::TextSelected => {
-                        // Unlike AI blocks, CLI subagent view text selections should not coexist
-                        // with block list or alt screen text selections. Clear those first before
-                        // calling `clear_selected_text_except`, which handles the side effects
-                        // (clipboard sync, context model, etc.) and clears other rich content views.
-                        {
-                            let mut model = me.model.lock();
-                            model.block_list_mut().clear_selection();
-                            model.alt_screen_mut().clear_selection();
-                        }
-                        // Also reset transient terminal-side selection state so stale alt-screen
-                        // selection visuals don't persist after switching selection focus to the
-                        // CLI subagent view.
-                        me.is_selecting = false;
-                        me.block_text_selection_start_position = None;
-                        me.clear_selected_text_except(Some(view.id()), ctx);
-                        ctx.notify();
-                    }
-                    CLISubagentViewEvent::CopiedEmptyText => {
-                        me.copy(ctx);
-                    }
-                    #[cfg(windows)]
-                    CLISubagentViewEvent::WindowsCtrlC => {
-                        me.ctrl_c(ctx);
-                    }
-                });
-
-                if let Some(initial_requested_command_id) = initial_requested_command_action_id {
-                    // Remove the AI block for the request/response pair that resulted in spawning
-                    // the CLI subagent. You can think of this block as corresponding to the
-                    // initial action result input for the long running requested command (the
-                    // initial output snapshot) and the output containing the subagent tool call.
-                    //
-                    // This block doesn't actually have any renderable inputs or outputs (typically,
-                    // the output tool call would be rendered like all our other tool calls), but
-                    // the CLI subagent tool call is 'special' in that it corresponds to UI rendered
-                    // on the _command_ block for the previously requested command.
-                    //
-                    // We remove this block so the AI block originally containing the requested
-                    // command remains immediately above the actual command block in the blocklist,
-                    // which enables visual continuity in the requested command's expanded state
-                    // (e.g. the expanded requested command header appears right on top of the
-                    // running command block; they appear part of the same UI component).
-                    if let Some(result_ai_block_id) =
-                        self.rich_content_views.iter().find_map(|view| {
-                            let ai_metadata = view.ai_block_metadata()?;
-                            ai_metadata
-                                .ai_block_handle
-                                .as_ref(ctx)
-                                .contains_action_result(initial_requested_command_id, ctx)
-                                .then_some(view.view_id())
-                        })
-                    {
-                        self.rich_content_views
-                            .retain(|rich_content| rich_content.view_id() != result_ai_block_id);
-                        self.model
-                            .lock()
-                            .block_list_mut()
-                            .remove_rich_content(result_ai_block_id);
-                    }
-                }
             }
             CLISubagentEvent::UpdatedControl {
                 agent_has_control, ..

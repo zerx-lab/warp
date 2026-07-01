@@ -9,6 +9,7 @@ use super::blocklist_filter::exchanges_for_blocklist;
 use crate::ai::blocklist::agent_view::{
     AgentViewEntryBlockParams, AgentViewEntryOrigin, DismissalStrategy, EphemeralMessage,
 };
+use crate::ai::blocklist::block::cli::CLISubagentViewMode;
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 use crate::ai::blocklist::history_model::{CLIAgentConversation, LoadedConversationData};
 use crate::ai::blocklist::BlocklistAIContextModel;
@@ -528,6 +529,49 @@ impl TerminalView {
         blocks_created
     }
 
+    pub(super) fn restore_cli_subagent_views_for_conversation(
+        &mut self,
+        conversation: &AIConversation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let targets = conversation
+            .all_tasks()
+            .filter(|task| task.is_cli_subagent())
+            .filter_map(|task| {
+                let block_id = task.cli_subagent_block_id()?;
+                Some((block_id, task.id().clone()))
+            })
+            .collect::<Vec<_>>();
+
+        for (block_id, task_id) in targets {
+            let should_restore = {
+                let model = self.model.lock();
+                model
+                    .block_list()
+                    .block_with_id(&block_id)
+                    .is_some_and(|block| {
+                        // 已恢复的 command block 已经完成，不能依赖 live 长任务 predicate；
+                        // 这里用持久化 metadata 精确确认它属于当前 conversation 的 CLI subagent task。
+                        block.agent_interaction_metadata().is_some_and(|metadata| {
+                            metadata.conversation_id() == &conversation.id()
+                                && metadata.subagent_task_id() == Some(&task_id)
+                        })
+                    })
+            };
+
+            if should_restore && !self.cli_subagent_views.contains_key(&block_id) {
+                self.create_cli_subagent_view(
+                    block_id,
+                    conversation.id(),
+                    task_id,
+                    CLISubagentViewMode::RestoredReadOnly,
+                    None,
+                    ctx,
+                );
+            }
+        }
+    }
+
     /// Restore a conversation using the stored exchanges for said conversation.
     /// This is used for opening a historical conversation from the agent mode homepage, and
     /// when loading from a debug link.
@@ -542,6 +586,7 @@ impl TerminalView {
             "Restoring conversation after view creation: {}",
             conversation_id
         );
+        let conversation_for_cli_subagent_restore = restored.ai_conversation.clone();
 
         // Calculate height for AI blocks
         let size_info = *self.size_info;
@@ -587,6 +632,10 @@ impl TerminalView {
         // Restore action results from all exchanges
         let blocks_created =
             self.restore_conversations_from_block_params(all_ai_block_params, vec![restored], ctx);
+        self.restore_cli_subagent_views_for_conversation(
+            &conversation_for_cli_subagent_restore,
+            ctx,
+        );
 
         log::info!(
             "Successfully restored {blocks_created} AI blocks for conversation: {conversation_id}"
@@ -647,6 +696,10 @@ impl TerminalView {
         if restored_conversations.is_empty() {
             return;
         }
+        let conversations_for_cli_subagent_restore = restored_conversations
+            .iter()
+            .map(|restored| restored.ai_conversation.clone())
+            .collect::<Vec<_>>();
         let conversation_ids = restored_conversations
             .iter()
             .map(|r| r.ai_conversation.id())
@@ -724,6 +777,9 @@ impl TerminalView {
             restored_conversations,
             ctx,
         );
+        for conversation in &conversations_for_cli_subagent_restore {
+            self.restore_cli_subagent_views_for_conversation(conversation, ctx);
+        }
 
         if is_fork_conversation_in_new_pane {
             for conversation_id in &conversation_ids {

@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use crate::ai::agent::conversation::ConversationStatus;
 use parking_lot::FairMutex;
+use warp_multi_agent_api as api;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
 use warpui::{notification::UserNotification, Presenter, WindowInvalidation};
 
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::task::TaskId;
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
 use warpui::App;
@@ -46,10 +48,17 @@ use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::view_components::find::FindWithinBlockState;
 
-use crate::terminal::model::ansi::{self, InitShellValue};
+use crate::terminal::model::ansi::{self, InitShellValue, PrecmdValue};
 use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
+use crate::terminal::model::block::AgentInteractionMetadata;
+use crate::terminal::model::block::BlockId;
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
+use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::terminal_model::WithinBlock;
+use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
+use crate::test_util::ai_agent_tasks::{
+    create_api_subtask, create_api_task, create_message, create_subagent_tool_call_message,
+};
 
 use crate::terminal::{MockTerminalManager, TerminalManager, TerminalModel};
 use crate::test_util::terminal::initialize_app_for_terminal_view;
@@ -78,6 +87,101 @@ impl TerminalManager for TestTerminalManager {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+fn build_restored_conversation_with_cli_subagent_for_test(
+    block_id: BlockId,
+    task_id: TaskId,
+) -> AIConversation {
+    // 构造包含 CLI subagent tool call 的历史 conversation，模拟普通 /agent 历史恢复数据。
+    let root_task_id = "root-task";
+    let task_id_string = String::from(task_id);
+    let root_task = create_api_task(
+        root_task_id,
+        vec![create_subagent_tool_call_message(
+            "cli-subagent-call",
+            root_task_id,
+            &task_id_string,
+            Some(api::message::tool_call::subagent::Metadata::Cli(
+                api::message::tool_call::subagent::CliSubagent {
+                    command_id: String::from(block_id),
+                },
+            )),
+        )],
+    );
+    let subtask = create_api_subtask(
+        &task_id_string,
+        root_task_id,
+        vec![create_message("cli-subagent-output", &task_id_string)],
+    );
+
+    AIConversation::new_restored(AIConversationId::new(), vec![root_task, subtask], None)
+        .expect("restored CLI subagent conversation should build")
+}
+
+fn create_restored_cli_subagent_block_for_test(
+    view: &mut TerminalView,
+    block_id: BlockId,
+    conversation_id: AIConversationId,
+    task_id: TaskId,
+) {
+    // 恢复路径只依赖 block id 和 AI metadata；这里避免创建完整命令输出，让测试聚焦接线。
+    let mut model = view.model.lock();
+    let block_list = model.block_list_mut();
+    block_list.create_new_block_with_local_status(
+        block_id.clone(),
+        BootstrapStage::RestoreBlocks,
+        Some(PrecmdValue::default()),
+        true,
+    );
+    block_list
+        .mut_block_from_id(&block_id)
+        .expect("restored CLI subagent block should exist")
+        .set_agent_interaction_mode(AgentInteractionMetadata::new(
+            Some("cli-action-1".to_string().into()),
+            conversation_id,
+            Some(task_id),
+            None,
+            false,
+            false,
+        ));
+}
+
+#[test]
+fn restores_cli_subagent_view_after_historical_conversation_restore() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let block_id = BlockId::from("cli-block-1".to_string());
+        let task_id = TaskId::new("cli-task-1".to_string());
+        let conversation = build_restored_conversation_with_cli_subagent_for_test(
+            block_id.clone(),
+            task_id.clone(),
+        );
+        let conversation_id = conversation.id();
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            create_restored_cli_subagent_block_for_test(
+                view,
+                block_id.clone(),
+                conversation_id,
+                task_id,
+            );
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(conversation),
+                true,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.cli_subagent_views.contains_key(&block_id),
+                "restored CLI subagent view should be keyed by its command block id"
+            );
+        });
+    });
 }
 
 /// Test to verify that blocks created through normal execution
