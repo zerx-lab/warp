@@ -1,4 +1,5 @@
 use crate::ai::agent::comment::CodeReview;
+use crate::ai::blocklist::block::cli_controller::LongRunningCommandControlState;
 use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
@@ -95,6 +96,12 @@ pub(crate) struct CommandBlockInfo {
     pub(crate) output: String,
     pub(crate) exit_code: ExitCode,
     pub(crate) ai_metadata: Option<String>,
+    /// 为 CLI subagent 恢复时保留稳定的 command block id。
+    pub(crate) block_id: Option<BlockId>,
+    /// 记录发起命令的 action id，用于恢复 requested command 关联。
+    pub(crate) requested_command_action_id: Option<AIAgentActionId>,
+    /// 记录 CLI subagent task id，用于恢复只读详情卡关联。
+    pub(crate) subagent_task_id: Option<TaskId>,
     /// The api message ID that this command block was extracted from.
     /// Used to find the corresponding exchange for timestamp and PWD.
     pub(crate) message_id: String,
@@ -3248,8 +3255,25 @@ impl AIConversation {
                                     ))
                                     .unwrap_or_default(),
                                 ),
+                                block_id: None,
+                                requested_command_action_id: Some(tool_call_id.clone().into()),
+                                subagent_task_id: None,
                                 message_id: (*result_message_id).to_string(),
                             });
+                        }
+                    }
+                }
+
+                // CLI subagent 紧跟在命令 tool call 之后时，把稳定 block id 和 subtask id
+                // 回填到最近生成的命令块，供历史恢复时重建只读关联。
+                if let Some(subagent) = tool_call.subagent() {
+                    if let Some(api::message::tool_call::subagent::Metadata::Cli(cli)) =
+                        &subagent.metadata
+                    {
+                        if let Some(command_block) = command_blocks.last_mut() {
+                            command_block.block_id = Some(BlockId::from(cli.command_id.clone()));
+                            command_block.subagent_task_id =
+                                Some(TaskId::new(subagent.task_id.clone()));
                         }
                     }
                 }
@@ -3276,6 +3300,9 @@ impl AIConversation {
                         output: cmd.output.clone(),
                         exit_code: ExitCode::from(cmd.exit_code),
                         ai_metadata: None,
+                        block_id: None,
+                        requested_command_action_id: None,
+                        subagent_task_id: None,
                         message_id: message_id.clone(),
                     });
                 }
@@ -3299,6 +3326,9 @@ impl AIConversation {
                             output: executed_shell_command.output.clone(),
                             exit_code: ExitCode::from(executed_shell_command.exit_code),
                             ai_metadata: None,
+                            block_id: None,
+                            requested_command_action_id: None,
+                            subagent_task_id: None,
                             message_id: message_id.clone(),
                         });
                     }
@@ -3341,8 +3371,29 @@ impl AIConversation {
                 .map(|exchange| (exchange.working_directory.clone(), exchange.start_time))
                 .unwrap_or((fallback_pwd.clone(), fallback_time));
 
+            // CLI subagent 恢复时序列化可见、只读的 agent 关联元数据；其他块保持原有元数据。
+            let ai_metadata = if let Some(subagent_task_id) = command_block.subagent_task_id.clone()
+            {
+                serde_json::to_string(&Some(Into::<SerializedAIMetadata>::into(
+                    AgentInteractionMetadata::new(
+                        command_block.requested_command_action_id.clone(),
+                        self.id(),
+                        Some(subagent_task_id),
+                        Some(LongRunningCommandControlState::Agent {
+                            is_blocked: false,
+                            should_hide_responses: false,
+                        }),
+                        false,
+                        false,
+                    ),
+                )))
+                .ok()
+            } else {
+                command_block.ai_metadata
+            };
+
             let serialized_block = SerializedBlock {
-                id: BlockId::new(),
+                id: command_block.block_id.unwrap_or_else(BlockId::new),
                 stylized_command: Self::to_stylized_bytes(&command_block.command),
                 stylized_output: Self::to_stylized_bytes(&command_block.output),
                 pwd,
@@ -3362,7 +3413,7 @@ impl AIConversation {
                 shell_host: None,
                 is_background: false,
                 prompt_snapshot: None,
-                ai_metadata: command_block.ai_metadata,
+                ai_metadata,
                 is_local: Some(true),
                 agent_view_visibility: Some(
                     AgentViewVisibility::new_from_conversation(self.id).into(),

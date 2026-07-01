@@ -111,7 +111,7 @@ pub struct SerializedAIMetadata {
 
     /// `true` if this block should be hidden from the user (as is the case with AI-requested
     /// commands, for example).
-    #[serde(default = "default_as_true", skip)]
+    #[serde(default = "default_as_true")]
     should_hide_block: bool,
 }
 
