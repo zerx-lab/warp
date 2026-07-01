@@ -60,7 +60,7 @@ use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{AISettings, SelectionSettings};
 use crate::terminal::input::SET_INPUT_MODE_TERMINAL_ACTION_NAME;
-use crate::terminal::model::block::BlockId;
+use crate::terminal::model::block::{AgentInteractionMetadata, BlockId};
 use crate::terminal::{ShellLaunchData, TerminalModel};
 use crate::view_components::DismissibleToast;
 use crate::workspace::WorkspaceAction;
@@ -210,6 +210,24 @@ fn cli_subagent_should_render_user_input(
     is_input_dismissed: bool,
 ) -> bool {
     !should_hide_responses && !is_input_dismissed
+}
+
+/// 判断 CLI subagent 视图在不同模式下是否应该渲染。
+fn cli_subagent_should_render_for_metadata(
+    mode: CLISubagentViewMode,
+    metadata: Option<&AgentInteractionMetadata>,
+    conversation_id: AIConversationId,
+    task_id: &TaskId,
+    is_agent_monitoring: bool,
+    is_eligible_for_agent_handoff: bool,
+) -> bool {
+    match mode {
+        CLISubagentViewMode::Live => is_agent_monitoring && !is_eligible_for_agent_handoff,
+        CLISubagentViewMode::RestoredReadOnly => metadata.is_some_and(|metadata| {
+            metadata.conversation_id() == &conversation_id
+                && metadata.subagent_task_id() == Some(task_id)
+        }),
+    }
 }
 
 /// 统计 CLI 浮窗实际渲染的 output sections，供脱敏索引与 render 累计保持一致。
@@ -413,6 +431,8 @@ pub struct CLISubagentView {
     action_model: ModelHandle<BlocklistAIActionModel>,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     conversation_id: AIConversationId,
+    task_id: TaskId,
+    mode: CLISubagentViewMode,
     terminal_view_id: EntityId,
 
     state_handles: StateHandles,
@@ -448,6 +468,12 @@ pub struct CLISubagentView {
     shell_launch_data: Option<ShellLaunchData>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CLISubagentViewMode {
+    Live,
+    RestoredReadOnly,
+}
+
 impl CLISubagentView {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -459,6 +485,59 @@ impl CLISubagentView {
         task_id: TaskId,
         current_working_directory: Option<String>,
         shell_launch_data: Option<ShellLaunchData>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        Self::new_with_mode(
+            block_id,
+            action_model,
+            subagent_controller,
+            terminal_model,
+            conversation_id,
+            task_id,
+            current_working_directory,
+            shell_launch_data,
+            CLISubagentViewMode::Live,
+            ctx,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_restored(
+        block_id: BlockId,
+        action_model: ModelHandle<BlocklistAIActionModel>,
+        subagent_controller: ModelHandle<CLISubagentController>,
+        terminal_model: Arc<FairMutex<TerminalModel>>,
+        conversation_id: AIConversationId,
+        task_id: TaskId,
+        current_working_directory: Option<String>,
+        shell_launch_data: Option<ShellLaunchData>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Self {
+        Self::new_with_mode(
+            block_id,
+            action_model,
+            subagent_controller,
+            terminal_model,
+            conversation_id,
+            task_id,
+            current_working_directory,
+            shell_launch_data,
+            CLISubagentViewMode::RestoredReadOnly,
+            ctx,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_mode(
+        block_id: BlockId,
+        action_model: ModelHandle<BlocklistAIActionModel>,
+        subagent_controller: ModelHandle<CLISubagentController>,
+        terminal_model: Arc<FairMutex<TerminalModel>>,
+        conversation_id: AIConversationId,
+        task_id: TaskId,
+        current_working_directory: Option<String>,
+        shell_launch_data: Option<ShellLaunchData>,
+        mode: CLISubagentViewMode,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let allow_button = CompactibleSplitActionButton::new(
@@ -582,7 +661,7 @@ impl CLISubagentView {
                         if let Ok(model) = AIBlockModelImpl::<CLISubagentView>::new(
                             appended_exchange_id,
                             *conversation_id,
-                            false,
+                            mode == CLISubagentViewMode::RestoredReadOnly,
                             false,
                             ctx,
                         ) {
@@ -685,7 +764,7 @@ impl CLISubagentView {
         let model = AIBlockModelImpl::<CLISubagentView>::new(
             exchange_id,
             conversation_id,
-            false,
+            mode == CLISubagentViewMode::RestoredReadOnly,
             false,
             ctx,
         )
@@ -713,7 +792,7 @@ impl CLISubagentView {
             if let Ok(history_model) = AIBlockModelImpl::<CLISubagentView>::new(
                 history_exchange_id,
                 conversation_id,
-                false,
+                mode == CLISubagentViewMode::RestoredReadOnly,
                 false,
                 ctx,
             ) {
@@ -767,6 +846,8 @@ impl CLISubagentView {
             terminal_model,
             subagent_controller,
             conversation_id,
+            task_id,
+            mode,
             terminal_view_id: ctx.view_id(),
             link_detection_state: Default::default(),
             code_editor_views: Default::default(),
@@ -1354,7 +1435,14 @@ impl View for CLISubagentView {
             return Empty::new().finish();
         };
 
-        if !block.is_agent_monitoring() || block.is_eligible_for_agent_handoff() {
+        if !cli_subagent_should_render_for_metadata(
+            self.mode,
+            block.agent_interaction_metadata(),
+            self.conversation_id,
+            &self.task_id,
+            block.is_agent_monitoring(),
+            block.is_eligible_for_agent_handoff(),
+        ) {
             return Empty::new().finish();
         }
 
@@ -1370,6 +1458,7 @@ impl View for CLISubagentView {
         let mut conversation_items = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+        let is_restored_read_only = self.mode == CLISubagentViewMode::RestoredReadOnly;
 
         let models_to_render = if self.history_models.is_empty() {
             vec![&self.model]
@@ -1747,138 +1836,151 @@ impl View for CLISubagentView {
                 rendered_output_index += 1;
             }
 
-            if let Some(rendered_action) = blocked_action.and_then(|action| match action.action {
-                AIAgentActionType::WriteToLongRunningShellCommand { input, mode, .. } => {
-                    Some(render_blocked_action(
-                        BlockedActionProps {
-                            header: BLOCKED_ACTION_MESSAGE_FOR_WRITE_TO_LONG_RUNNING_SHELL_COMMAND
-                                .to_string(),
-                            description: Some(render_write_to_pty_input(
-                                WriteToPtyInputProps {
-                                    input: input.clone(),
-                                    mode,
+            if !is_restored_read_only {
+                if let Some(rendered_action) =
+                    blocked_action.and_then(|action| match action.action {
+                        AIAgentActionType::WriteToLongRunningShellCommand {
+                            input, mode, ..
+                        } => Some(render_blocked_action(
+                            BlockedActionProps {
+                                header:
+                                    BLOCKED_ACTION_MESSAGE_FOR_WRITE_TO_LONG_RUNNING_SHELL_COMMAND
+                                        .to_string(),
+                                description: Some(render_write_to_pty_input(
+                                    WriteToPtyInputProps {
+                                        input: input.clone(),
+                                        mode,
+                                    },
+                                    app,
+                                )),
+                                is_allow_menu_open: self.is_allow_menu_open,
+                                allow_menu: Some(&self.allow_menu),
+                                buttons: vec![
+                                    &self.allow_button,
+                                    &self.reject_button,
+                                    &self.take_over_button,
+                                ],
+                                speedbump: should_show_write_to_pty_speedbump(app).then_some(
+                                    PermissionsSpeedbumpProps {
+                                        always_allow_checked: self
+                                            .always_allow_write_to_pty_checked,
+                                        speedbump_checkbox_handle: &self
+                                            .state_handles
+                                            .speedbump_checkbox_handle,
+                                        speedbump_checkbox_action:
+                                            CLISubagentAction::ToggleAlwaysAllowWriteToPty,
+                                        ai_settings_link: &self.state_handles.ai_settings_link,
+                                    },
+                                ),
+                            },
+                            app,
+                        )),
+                        AIAgentActionType::TransferShellCommandControlToUser { ref reason } => {
+                            Some(render_blocked_action(
+                                BlockedActionProps {
+                                    header: BLOCKED_ACTION_MESSAGE_FOR_TRANSFER_CONTROL.to_string(),
+                                    description: Some(render_transfer_control_reason(reason, app)),
+                                    is_allow_menu_open: false,
+                                    allow_menu: None,
+                                    buttons: vec![
+                                        &self.reject_button,
+                                        &self.transfer_control_button,
+                                    ],
+                                    speedbump: None,
                                 },
                                 app,
-                            )),
-                            is_allow_menu_open: self.is_allow_menu_open,
-                            allow_menu: Some(&self.allow_menu),
-                            buttons: vec![
-                                &self.allow_button,
-                                &self.reject_button,
-                                &self.take_over_button,
-                            ],
-                            speedbump: should_show_write_to_pty_speedbump(app).then_some(
-                                PermissionsSpeedbumpProps {
-                                    always_allow_checked: self.always_allow_write_to_pty_checked,
-                                    speedbump_checkbox_handle: &self
-                                        .state_handles
-                                        .speedbump_checkbox_handle,
-                                    speedbump_checkbox_action:
-                                        CLISubagentAction::ToggleAlwaysAllowWriteToPty,
-                                    ai_settings_link: &self.state_handles.ai_settings_link,
-                                },
-                            ),
-                        },
-                        app,
-                    ))
-                }
-                AIAgentActionType::TransferShellCommandControlToUser { ref reason } => {
-                    Some(render_blocked_action(
-                        BlockedActionProps {
-                            header: BLOCKED_ACTION_MESSAGE_FOR_TRANSFER_CONTROL.to_string(),
-                            description: Some(render_transfer_control_reason(reason, app)),
-                            is_allow_menu_open: false,
-                            allow_menu: None,
-                            buttons: vec![&self.reject_button, &self.transfer_control_button],
-                            speedbump: None,
-                        },
-                        app,
-                    ))
-                }
-                AIAgentActionType::ReadFiles(..)
-                | AIAgentActionType::Grep { .. }
-                | AIAgentActionType::FileGlobV2 { .. } => Some(render_blocked_action(
-                    BlockedActionProps {
-                        header: get_blocked_action_header(action.action.clone())
-                            .unwrap_or_default(),
-                        description: render_search_action_input(action.action.clone(), app),
-                        is_allow_menu_open: self.is_allow_menu_open,
-                        allow_menu: Some(&self.allow_menu),
-                        buttons: vec![
-                            &self.allow_button,
-                            &self.reject_button,
-                            &self.take_over_button,
-                        ],
-                        speedbump: should_show_read_files_speedbump(app).then_some(
-                            PermissionsSpeedbumpProps {
-                                always_allow_checked: self.always_allow_read_files_checked,
-                                speedbump_checkbox_handle: &self
-                                    .state_handles
-                                    .speedbump_checkbox_handle,
-                                speedbump_checkbox_action:
-                                    CLISubagentAction::ToggleAlwaysAllowReadFiles,
-                                ai_settings_link: &self.state_handles.ai_settings_link,
+                            ))
+                        }
+                        AIAgentActionType::ReadFiles(..)
+                        | AIAgentActionType::Grep { .. }
+                        | AIAgentActionType::FileGlobV2 { .. } => Some(render_blocked_action(
+                            BlockedActionProps {
+                                header: get_blocked_action_header(action.action.clone())
+                                    .unwrap_or_default(),
+                                description: render_search_action_input(action.action.clone(), app),
+                                is_allow_menu_open: self.is_allow_menu_open,
+                                allow_menu: Some(&self.allow_menu),
+                                buttons: vec![
+                                    &self.allow_button,
+                                    &self.reject_button,
+                                    &self.take_over_button,
+                                ],
+                                speedbump: should_show_read_files_speedbump(app).then_some(
+                                    PermissionsSpeedbumpProps {
+                                        always_allow_checked: self.always_allow_read_files_checked,
+                                        speedbump_checkbox_handle: &self
+                                            .state_handles
+                                            .speedbump_checkbox_handle,
+                                        speedbump_checkbox_action:
+                                            CLISubagentAction::ToggleAlwaysAllowReadFiles,
+                                        ai_settings_link: &self.state_handles.ai_settings_link,
+                                    },
+                                ),
                             },
-                        ),
-                    },
-                    app,
-                )),
-                _ => None,
-            }) {
-                let action_selection_handle = selection_handle_for_index(
-                    &self.state_handles.action_selection_handles,
-                    model_index,
-                );
-                let selected_text = self.selected_text.clone();
-                let query_selection_handles = self.state_handles.query_selection_handles.clone();
-                let output_selection_handles = self.state_handles.output_selection_handles.clone();
-                let action_selection_handles = self.state_handles.action_selection_handles.clone();
-                // 克隆一份本区域句柄进闭包，判断"本区域是否真的在参与选择"。
-                // Flex 会把同一鼠标事件广播给所有兄弟 SelectableArea，未命中的气泡也会触发本回调，
-                // 此时不能用未命中的回调去清掉真正命中区域的划词状态。
-                let action_selection_handle_clone = action_selection_handle.clone();
-                let mut selectable_action = SelectableArea::new(
-                    action_selection_handle,
-                    move |selection_args, ctx, _| {
-                        let selection = selection_args.selection;
-                        // 只有本区域确实参与选择时（正在 selecting 或已产生非空选中文本），
-                        // 才清掉其它同级区域的旧选择；未命中广播则保持原状。
-                        let is_this_area_active = action_selection_handle_clone.is_selecting()
-                            || selection.as_ref().is_some_and(|s| !s.is_empty());
-                        if is_this_area_active {
-                            clear_selection_handles_for_active_area(
-                                &query_selection_handles,
-                                &output_selection_handles,
-                                &action_selection_handles,
-                                SelectionHandleGroup::Action,
-                                model_index,
-                            );
-                        }
-                        if let Some(selection) = selection.filter(|selection| !selection.is_empty())
-                        {
-                            ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
-                                selection.clone(),
-                            ));
-                            *selected_text.write() = Some(selection);
-                            ctx.dispatch_typed_action(CLISubagentAction::SelectText);
-                        } else if is_this_area_active {
-                            *selected_text.write() = None;
-                        }
-                    },
-                    rendered_action,
-                )
-                .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
-                .with_smart_select_fn(semantic_selection.smart_select_fn());
+                            app,
+                        )),
+                        _ => None,
+                    })
+                {
+                    let action_selection_handle = selection_handle_for_index(
+                        &self.state_handles.action_selection_handles,
+                        model_index,
+                    );
+                    let selected_text = self.selected_text.clone();
+                    let query_selection_handles =
+                        self.state_handles.query_selection_handles.clone();
+                    let output_selection_handles =
+                        self.state_handles.output_selection_handles.clone();
+                    let action_selection_handles =
+                        self.state_handles.action_selection_handles.clone();
+                    // 克隆一份本区域句柄进闭包，判断"本区域是否真的在参与选择"。
+                    // Flex 会把同一鼠标事件广播给所有兄弟 SelectableArea，未命中的气泡也会触发本回调，
+                    // 此时不能用未命中的回调去清掉真正命中区域的划词状态。
+                    let action_selection_handle_clone = action_selection_handle.clone();
+                    let mut selectable_action = SelectableArea::new(
+                        action_selection_handle,
+                        move |selection_args, ctx, _| {
+                            let selection = selection_args.selection;
+                            // 只有本区域确实参与选择时（正在 selecting 或已产生非空选中文本），
+                            // 才清掉其它同级区域的旧选择；未命中广播则保持原状。
+                            let is_this_area_active = action_selection_handle_clone.is_selecting()
+                                || selection.as_ref().is_some_and(|s| !s.is_empty());
+                            if is_this_area_active {
+                                clear_selection_handles_for_active_area(
+                                    &query_selection_handles,
+                                    &output_selection_handles,
+                                    &action_selection_handles,
+                                    SelectionHandleGroup::Action,
+                                    model_index,
+                                );
+                            }
+                            if let Some(selection) =
+                                selection.filter(|selection| !selection.is_empty())
+                            {
+                                ctx.dispatch_typed_action(CLISubagentAction::CopyOnSelect(
+                                    selection.clone(),
+                                ));
+                                *selected_text.write() = Some(selection);
+                                ctx.dispatch_typed_action(CLISubagentAction::SelectText);
+                            } else if is_this_area_active {
+                                *selected_text.write() = None;
+                            }
+                        },
+                        rendered_action,
+                    )
+                    .with_word_boundaries_policy(semantic_selection.word_boundary_policy())
+                    .with_smart_select_fn(semantic_selection.smart_select_fn());
 
-                if FeatureFlag::RectSelection.is_enabled() {
-                    selectable_action = selectable_action.should_support_rect_select();
+                    if FeatureFlag::RectSelection.is_enabled() {
+                        selectable_action = selectable_action.should_support_rect_select();
+                    }
+
+                    conversation_items.add_child(
+                        Container::new(selectable_action.finish())
+                            .with_margin_bottom(8.)
+                            .finish(),
+                    );
                 }
-
-                conversation_items.add_child(
-                    Container::new(selectable_action.finish())
-                        .with_margin_bottom(8.)
-                        .finish(),
-                );
             }
         }
 
@@ -1947,6 +2049,9 @@ impl View for CLISubagentView {
 
     fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {
         let mut context = Self::default_keymap_context();
+        if self.mode == CLISubagentViewMode::RestoredReadOnly {
+            return context;
+        }
 
         let terminal_model = self.terminal_model.lock();
         let active_block = terminal_model.block_list().active_block();
@@ -1985,6 +2090,7 @@ impl TypedActionView for CLISubagentView {
     type Action = CLISubagentAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        let is_restored_read_only = self.mode == CLISubagentViewMode::RestoredReadOnly;
         match action {
             CLISubagentAction::CopyCode(code) => {
                 ctx.clipboard()
@@ -2003,23 +2109,41 @@ impl TypedActionView for CLISubagentView {
                 log::info!("Received open code block action: {source:?}");
             }
             CLISubagentAction::ExecuteBlockedAction => {
+                if is_restored_read_only {
+                    return;
+                }
                 self.handle_execute_blocked_action(false, ctx);
             }
             CLISubagentAction::ExecuteAndAutoApprove => {
+                if is_restored_read_only {
+                    return;
+                }
                 self.handle_execute_blocked_action(true, ctx);
             }
             CLISubagentAction::RejectBlockedAction {
                 should_user_take_over,
             } => {
+                if is_restored_read_only {
+                    return;
+                }
                 self.handle_reject_blocked_action(*should_user_take_over, ctx);
             }
             CLISubagentAction::TakeControlOfRunningCommand => {
+                if is_restored_read_only {
+                    return;
+                }
                 self.take_control_of_running_command(ctx);
             }
             CLISubagentAction::ToggleAllowMenu => {
+                if is_restored_read_only {
+                    return;
+                }
                 self.toggle_allow_menu(ctx);
             }
             CLISubagentAction::ToggleAlwaysAllowWriteToPty => {
+                if is_restored_read_only {
+                    return;
+                }
                 self.always_allow_write_to_pty_checked = !self.always_allow_write_to_pty_checked;
                 BlocklistAIPermissions::handle(ctx).update(ctx, |model, ctx| {
                     if let Err(e) = model.set_always_allow_write_to_pty(
@@ -2033,6 +2157,9 @@ impl TypedActionView for CLISubagentView {
                 ctx.notify();
             }
             CLISubagentAction::ToggleAlwaysAllowReadFiles => {
+                if is_restored_read_only {
+                    return;
+                }
                 self.always_allow_read_files_checked = !self.always_allow_read_files_checked;
                 BlocklistAIPermissions::handle(ctx).update(ctx, |model, ctx| {
                     if let Err(e) = model.set_always_allow_read_files(
@@ -2697,6 +2824,29 @@ mod tests {
         AIAgentTextSection::PlainText {
             text: AgentOutputText::from(text.to_string()),
         }
+    }
+
+    #[test]
+    fn restored_cli_subagent_view_renders_for_matching_metadata() {
+        let conversation_id = AIConversationId::new();
+        let task_id = TaskId::new("task-1".to_string());
+        let metadata = AgentInteractionMetadata::new(
+            None,
+            conversation_id,
+            Some(task_id.clone()),
+            None,
+            false,
+            false,
+        );
+
+        assert!(cli_subagent_should_render_for_metadata(
+            CLISubagentViewMode::RestoredReadOnly,
+            Some(&metadata),
+            conversation_id,
+            &task_id,
+            false,
+            false,
+        ));
     }
 
     #[test]
