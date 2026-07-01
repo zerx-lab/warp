@@ -51,6 +51,60 @@ fn user_query_message(id: &str, request_id: &str, query: &str) -> api::Message {
     }
 }
 
+#[allow(deprecated)]
+fn user_query_message_with_shell_context(
+    id: &str,
+    request_id: &str,
+    query: &str,
+    attachment_command: &str,
+    context_command: &str,
+) -> api::Message {
+    let mut referenced_attachments = HashMap::new();
+    referenced_attachments.insert(
+        "attachment-command".to_string(),
+        api::Attachment {
+            value: Some(api::attachment::Value::ExecutedShellCommand(
+                api::ExecutedShellCommand {
+                    command: attachment_command.to_string(),
+                    output: "attachment output".to_string(),
+                    exit_code: 0,
+                    command_id: "attachment-block".to_string(),
+                    is_auto_attached: false,
+                    started_ts: None,
+                    finished_ts: None,
+                },
+            )),
+        },
+    );
+
+    api::Message {
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+            query: query.to_string(),
+            context: Some(api::InputContext {
+                executed_shell_commands: vec![api::ExecutedShellCommand {
+                    command: context_command.to_string(),
+                    output: "context output".to_string(),
+                    exit_code: 0,
+                    command_id: "context-block".to_string(),
+                    is_auto_attached: false,
+                    started_ts: None,
+                    finished_ts: None,
+                }],
+                ..Default::default()
+            }),
+            referenced_attachments,
+            mode: None,
+            intended_agent: Default::default(),
+        })),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
 fn agent_output_message(id: &str, request_id: &str) -> api::Message {
     api::Message {
         id: id.to_string(),
@@ -429,6 +483,112 @@ fn test_cli_subagent_serialized_block_preserves_block_id_and_metadata() {
     assert_eq!(agent_metadata.subagent_task_id(), Some(&cli_task_id));
     assert!(agent_metadata.long_running_control_state().is_some());
     assert!(!agent_metadata.should_hide_block());
+}
+
+#[allow(deprecated)]
+#[test]
+fn test_cli_subagent_serialized_block_ignores_later_attachment_and_context_blocks() {
+    let cli_task_id = TaskId::new("cli-task-attachment-context".to_string());
+    let conversation = AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![
+            api::Task {
+                id: "root-task".to_string(),
+                messages: vec![
+                    tool_call_message_with_tool(
+                        "tool-call-1",
+                        "call-1",
+                        run_shell_command_tool(),
+                    ),
+                    tool_call_result_message_with_result(
+                        "tool-result-1",
+                        "call-1",
+                        api::message::tool_call_result::Result::RunShellCommand(
+                            api::RunShellCommandResult {
+                                command: "echo hi".to_string(),
+                                output: String::new(),
+                                exit_code: 0,
+                                result: Some(
+                                    api::run_shell_command_result::Result::CommandFinished(
+                                        api::ShellCommandFinished {
+                                            command_id: "cli-block-1".to_string(),
+                                            output: "hi".to_string(),
+                                            exit_code: 0,
+                                        },
+                                    ),
+                                ),
+                            },
+                        ),
+                    ),
+                    user_query_message_with_shell_context(
+                        "user-with-shell-context",
+                        "request-attachment-context",
+                        "show recent shell state",
+                        "cat attachment.txt",
+                        "cat context.txt",
+                    ),
+                    tool_call_message_with_tool(
+                        "subagent-call-1",
+                        "subagent-call-1",
+                        cli_subagent_tool(&String::from(cli_task_id.clone()), "cli-block-1"),
+                    ),
+                ],
+                dependencies: None,
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+            api::Task {
+                id: String::from(cli_task_id.clone()),
+                messages: vec![],
+                dependencies: Some(api::task::Dependencies {
+                    parent_task_id: "root-task".to_string(),
+                }),
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+        ],
+        None,
+    )
+    .unwrap();
+
+    let blocks = conversation.to_serialized_blocklist_items();
+    assert_eq!(blocks.len(), 3);
+
+    let SerializedBlockListItem::Command { block: run_shell_block } = &blocks[0];
+    assert_eq!(run_shell_block.id, BlockId::from("cli-block-1".to_string()));
+    let run_shell_metadata = run_shell_block
+        .ai_metadata
+        .as_ref()
+        .and_then(|json| serde_json::from_str::<Option<SerializedAIMetadata>>(json).ok())
+        .flatten()
+        .expect("CLI subagent metadata should stay on the RunShellCommand block");
+    let run_shell_agent_metadata: AgentInteractionMetadata = run_shell_metadata.into();
+    assert_eq!(
+        run_shell_agent_metadata.subagent_task_id(),
+        Some(&cli_task_id)
+    );
+
+    let SerializedBlockListItem::Command {
+        block: attachment_block,
+    } = &blocks[1];
+    assert_eq!(
+        String::from_utf8_lossy(&attachment_block.stylized_command),
+        "cat attachment.txt"
+    );
+    assert!(attachment_block.ai_metadata.is_none());
+    assert_ne!(attachment_block.id, BlockId::from("cli-block-1".to_string()));
+
+    let SerializedBlockListItem::Command {
+        block: context_block,
+    } = &blocks[2];
+    assert_eq!(
+        String::from_utf8_lossy(&context_block.stylized_command),
+        "cat context.txt"
+    );
+    assert!(context_block.ai_metadata.is_none());
+    assert_ne!(context_block.id, BlockId::from("cli-block-1".to_string()));
 }
 
 #[test]

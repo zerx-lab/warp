@@ -3182,6 +3182,10 @@ impl AIConversation {
         messages: &[api::Message],
         command_blocks: &mut Vec<CommandBlockInfo>,
     ) {
+        // 只跟踪当前 messages 扫描里最近一次由 RunShellCommand 创建的命令块，
+        // 避免后续 attachment/context 生成的块被 CLI subagent 误绑定。
+        let mut last_run_shell_command_block_index = None;
+
         // Build a map from tool_call_id to (RunShellCommandResult, result_message_id)
         // for efficient lookup within this message set.
         let tool_call_results: HashMap<&str, (&api::RunShellCommandResult, &str)> = messages
@@ -3260,6 +3264,8 @@ impl AIConversation {
                                 subagent_task_id: None,
                                 message_id: (*result_message_id).to_string(),
                             });
+                            last_run_shell_command_block_index =
+                                command_blocks.len().checked_sub(1);
                         }
                     }
                 }
@@ -3270,7 +3276,9 @@ impl AIConversation {
                     if let Some(api::message::tool_call::subagent::Metadata::Cli(cli)) =
                         &subagent.metadata
                     {
-                        if let Some(command_block) = command_blocks.last_mut() {
+                        if let Some(command_block) = last_run_shell_command_block_index
+                            .and_then(|index| command_blocks.get_mut(index))
+                        {
                             command_block.block_id = Some(BlockId::from(cli.command_id.clone()));
                             command_block.subagent_task_id =
                                 Some(TaskId::new(subagent.task_id.clone()));
