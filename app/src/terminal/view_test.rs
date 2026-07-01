@@ -13,6 +13,7 @@ use warpui::{notification::UserNotification, Presenter, WindowInvalidation};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::task::TaskId;
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
+use crate::ai::blocklist::SerializedBlockListItem;
 use warpui::App;
 
 use crate::pane_group::focus_state::PaneGroupFocusState;
@@ -48,12 +49,10 @@ use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::view_components::find::FindWithinBlockState;
 
-use crate::terminal::model::ansi::{self, InitShellValue, PrecmdValue};
+use crate::terminal::model::ansi::{self, InitShellValue};
 use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
-use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
-use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::terminal_model::WithinBlock;
 use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
 use crate::test_util::ai_agent_tasks::{
@@ -89,25 +88,108 @@ impl TerminalManager for TestTerminalManager {
     }
 }
 
+fn tool_call_message_with_tool_for_test(
+    id: &str,
+    call_id: &str,
+    tool: api::message::tool_call::Tool,
+) -> api::Message {
+    api::Message {
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+            tool_call_id: call_id.to_string(),
+            tool: Some(tool),
+        })),
+        request_id: "request-1".to_string(),
+        timestamp: None,
+    }
+}
+
+fn tool_call_result_message_with_result_for_test(
+    id: &str,
+    call_id: &str,
+    result: api::message::tool_call_result::Result,
+) -> api::Message {
+    api::Message {
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::ToolCallResult(
+            api::message::ToolCallResult {
+                tool_call_id: call_id.to_string(),
+                result: Some(result),
+                context: None,
+            },
+        )),
+        request_id: "request-1".to_string(),
+        timestamp: None,
+    }
+}
+
+fn run_shell_command_tool_for_test(command: &str) -> api::message::tool_call::Tool {
+    use api::message::tool_call::run_shell_command::WaitUntilCompleteValue;
+
+    // CLI subagent 会挂在这条 shell command block 上；字段只保留序列化所需的最小值。
+    api::message::tool_call::Tool::RunShellCommand(api::message::tool_call::RunShellCommand {
+        command: command.to_string(),
+        is_read_only: true,
+        uses_pager: false,
+        is_risky: false,
+        citations: vec![],
+        wait_until_complete_value: Some(WaitUntilCompleteValue::WaitUntilComplete(true)),
+        risk_category: 0,
+    })
+}
+
+#[allow(deprecated)]
 fn build_restored_conversation_with_cli_subagent_for_test(
     block_id: BlockId,
     task_id: TaskId,
 ) -> AIConversation {
     // 构造包含 CLI subagent tool call 的历史 conversation，模拟普通 /agent 历史恢复数据。
     let root_task_id = "root-task";
+    let block_id_string = String::from(block_id);
     let task_id_string = String::from(task_id);
     let root_task = create_api_task(
         root_task_id,
-        vec![create_subagent_tool_call_message(
-            "cli-subagent-call",
-            root_task_id,
-            &task_id_string,
-            Some(api::message::tool_call::subagent::Metadata::Cli(
-                api::message::tool_call::subagent::CliSubagent {
-                    command_id: String::from(block_id),
-                },
-            )),
-        )],
+        vec![
+            tool_call_message_with_tool_for_test(
+                "run-shell-call",
+                "run-shell-call-1",
+                run_shell_command_tool_for_test("ssh jump"),
+            ),
+            tool_call_result_message_with_result_for_test(
+                "run-shell-result",
+                "run-shell-call-1",
+                api::message::tool_call_result::Result::RunShellCommand(
+                    api::RunShellCommandResult {
+                        command: "ssh jump".to_string(),
+                        output: String::new(),
+                        exit_code: 0,
+                        result: Some(api::run_shell_command_result::Result::CommandFinished(
+                            api::ShellCommandFinished {
+                                command_id: block_id_string.clone(),
+                                output: "jump output".to_string(),
+                                exit_code: 0,
+                            },
+                        )),
+                    },
+                ),
+            ),
+            create_subagent_tool_call_message(
+                "cli-subagent-call",
+                root_task_id,
+                &task_id_string,
+                Some(api::message::tool_call::subagent::Metadata::Cli(
+                    api::message::tool_call::subagent::CliSubagent {
+                        command_id: block_id_string,
+                    },
+                )),
+            ),
+        ],
     );
     let subtask = create_api_subtask(
         &task_id_string,
@@ -119,36 +201,42 @@ fn build_restored_conversation_with_cli_subagent_for_test(
         .expect("restored CLI subagent conversation should build")
 }
 
-fn create_restored_cli_subagent_block_for_test(
-    view: &mut TerminalView,
-    block_id: BlockId,
-    conversation_id: AIConversationId,
-    task_id: TaskId,
-) {
-    // 恢复路径只依赖 block id 和 AI metadata；这里避免创建完整命令输出，让测试聚焦接线。
-    let mut model = view.model.lock();
-    let block_list = model.block_list_mut();
-    block_list.create_new_block_with_local_status(
-        block_id.clone(),
-        BootstrapStage::RestoreBlocks,
-        Some(PrecmdValue::default()),
-        true,
+fn build_restored_conversation_without_cli_subagent_for_test() -> AIConversation {
+    // 构造普通 /agent 历史 conversation，用于确认没有 CLI subagent 时不会误建浮窗。
+    let root_task_id = "root-task";
+    let root_task = create_api_task(
+        root_task_id,
+        vec![create_message("ordinary-agent-output", root_task_id)],
     );
-    block_list
-        .mut_block_from_id(&block_id)
-        .expect("restored CLI subagent block should exist")
-        .set_agent_interaction_mode(AgentInteractionMetadata::new(
-            Some("cli-action-1".to_string().into()),
-            conversation_id,
-            Some(task_id),
-            None,
-            false,
-            false,
-        ));
+
+    AIConversation::new_restored(AIConversationId::new(), vec![root_task], None)
+        .expect("ordinary restored conversation should build")
+}
+
+fn serialized_blocks_for_restored_cli_subagent_for_test(
+    conversation: &AIConversation,
+) -> Vec<SerializedBlockListItem> {
+    // 走真实持久化序列化路径，避免测试只验证内存中的临时 view 状态。
+    let serialized_blocks = conversation.to_serialized_blocklist_items();
+    assert_eq!(
+        serialized_blocks.len(),
+        1,
+        "CLI subagent conversation should serialize one command block"
+    );
+    serialized_blocks
+}
+
+fn clear_ai_metadata_for_serialized_blocks_for_test(blocks: &mut [SerializedBlockListItem]) {
+    // 模拟旧历史记录或损坏记录缺少 ai_metadata 的情况，恢复逻辑应安全跳过。
+    for item in blocks {
+        match item {
+            SerializedBlockListItem::Command { block } => block.ai_metadata = None,
+        }
+    }
 }
 
 #[test]
-fn restores_cli_subagent_view_after_historical_conversation_restore() {
+fn restores_cli_subagent_view_from_serialized_history_blocks() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
@@ -158,16 +246,10 @@ fn restores_cli_subagent_view_after_historical_conversation_restore() {
             block_id.clone(),
             task_id.clone(),
         );
-        let conversation_id = conversation.id();
+        let serialized_blocks = serialized_blocks_for_restored_cli_subagent_for_test(&conversation);
 
-        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal = add_window_with_terminal(&mut app, Some(&serialized_blocks));
         terminal.update(&mut app, |view, ctx| {
-            create_restored_cli_subagent_block_for_test(
-                view,
-                block_id.clone(),
-                conversation_id,
-                task_id,
-            );
             view.restore_conversation_after_view_creation(
                 RestoredAIConversation::new(conversation),
                 true,
@@ -179,6 +261,71 @@ fn restores_cli_subagent_view_after_historical_conversation_restore() {
             assert!(
                 view.cli_subagent_views.contains_key(&block_id),
                 "restored CLI subagent view should be keyed by its command block id"
+            );
+        });
+    });
+}
+
+#[test]
+fn skips_cli_subagent_view_restore_without_matching_ai_metadata() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let block_id = BlockId::from("cli-block-1".to_string());
+        let task_id = TaskId::new("cli-task-1".to_string());
+        let conversation = build_restored_conversation_with_cli_subagent_for_test(
+            block_id.clone(),
+            task_id,
+        );
+        let mut serialized_blocks =
+            serialized_blocks_for_restored_cli_subagent_for_test(&conversation);
+        clear_ai_metadata_for_serialized_blocks_for_test(&mut serialized_blocks);
+
+        let terminal = add_window_with_terminal(&mut app, Some(&serialized_blocks));
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(conversation),
+                true,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                !view.cli_subagent_views.contains_key(&block_id),
+                "missing metadata should not restore a CLI subagent view"
+            );
+            assert!(
+                !view.rich_content_views.is_empty(),
+                "normal /agent blocks should still restore without CLI metadata"
+            );
+        });
+    });
+}
+
+#[test]
+fn ordinary_agent_restore_does_not_create_cli_subagent_views() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let conversation = build_restored_conversation_without_cli_subagent_for_test();
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(conversation),
+                true,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.cli_subagent_views.is_empty(),
+                "ordinary /agent restore should not create CLI subagent views"
+            );
+            assert!(
+                !view.rich_content_views.is_empty(),
+                "ordinary /agent block should still restore"
             );
         });
     });

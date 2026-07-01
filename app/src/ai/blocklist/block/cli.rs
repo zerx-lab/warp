@@ -2850,6 +2850,47 @@ mod tests {
     }
 
     #[test]
+    fn restored_cli_subagent_view_requires_matching_metadata() {
+        let conversation_id = AIConversationId::new();
+        let other_conversation_id = AIConversationId::new();
+        let task_id = TaskId::new("task-1".to_string());
+        let other_task_id = TaskId::new("task-2".to_string());
+        let metadata = AgentInteractionMetadata::new(
+            None,
+            conversation_id,
+            Some(task_id.clone()),
+            None,
+            false,
+            false,
+        );
+
+        assert!(!cli_subagent_should_render_for_metadata(
+            CLISubagentViewMode::RestoredReadOnly,
+            None,
+            conversation_id,
+            &task_id,
+            true,
+            false,
+        ));
+        assert!(!cli_subagent_should_render_for_metadata(
+            CLISubagentViewMode::RestoredReadOnly,
+            Some(&metadata),
+            other_conversation_id,
+            &task_id,
+            true,
+            false,
+        ));
+        assert!(!cli_subagent_should_render_for_metadata(
+            CLISubagentViewMode::RestoredReadOnly,
+            Some(&metadata),
+            conversation_id,
+            &other_task_id,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
     fn cli_subagent_resize_width_bounds_allow_nearly_full_window() {
         assert_eq!(cli_subagent_width_bounds(1000.0), (360.0, 984.0));
     }
