@@ -5371,6 +5371,35 @@ impl TerminalView {
                 );
                 self.cli_subagent_views.remove(block_id);
 
+                // SSH 等交互式 CLI subagent 会话结束后，Live 卡片会被回收，
+                // 但用户仍应能在终端里看到折叠的只读终端交互卡片（与重开历史时一致）。
+                // 这里在 block 仍持有匹配 metadata 的前提下，用 RestoredReadOnly 模式重建。
+                if let Some(conversation_id) = conversation_id {
+                    let should_restore = {
+                        let model = self.model.lock();
+                        model.block_list().block_with_id(block_id).is_some_and(
+                            |block| {
+                                block.agent_interaction_metadata().is_some_and(|metadata| {
+                                    metadata.conversation_id() == conversation_id
+                                        && metadata.subagent_task_id() == Some(task_id)
+                                })
+                            },
+                        )
+                    };
+                    if should_restore
+                        && !self.cli_subagent_views.contains_key(block_id)
+                    {
+                        self.create_cli_subagent_view(
+                            block_id.clone(),
+                            *conversation_id,
+                            task_id.clone(),
+                            CLISubagentViewMode::RestoredReadOnly,
+                            None,
+                            ctx,
+                        );
+                    }
+                }
+
                 if FeatureFlag::AgentView.is_enabled() {
                     let Some(conversation_id) = conversation_id else {
                         return;

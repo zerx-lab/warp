@@ -15,7 +15,7 @@ use crate::ai::agent::task::TaskId;
 #[cfg(windows)]
 use crate::ai::blocklist::block::cli::CLISubagentViewEvent;
 use crate::ai::blocklist::block::cli_controller::{
-    LongRunningCommandControlState, UserTakeOverReason,
+    CLISubagentEvent, LongRunningCommandControlState, UserTakeOverReason,
 };
 use crate::ai::blocklist::SerializedBlockListItem;
 use warpui::App;
@@ -505,6 +505,104 @@ fn ordinary_agent_restore_does_not_create_cli_subagent_views() {
             assert!(
                 !view.rich_content_views.is_empty(),
                 "ordinary /agent block should still restore"
+            );
+        });
+    });
+}
+
+#[test]
+fn finished_cli_subagent_keeps_read_only_card_when_metadata_matches() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        // FinishedSubagent 会触发 sidecar 持久化，需要 GlobalResourceHandlesProvider。
+        let global_resource_handles = crate::GlobalResourceHandles::mock(&mut app);
+        app.add_singleton_model(|_| crate::GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        // 先恢复一个带 CLI subagent 的历史会话，建立带匹配 metadata 的 command block
+        // 和一个 RestoredReadOnly 视图，模拟 SSH 会话在 agent view 里展开后的状态。
+        // 用带 snapshot 的构造函数，确保 conversation_id 可控且与 block metadata 一致。
+        let block_id = BlockId::from("cli-block-finished".to_string());
+        let task_id = TaskId::new("cli-task-finished".to_string());
+        let conversation_id = AIConversationId::new();
+        let conversation = build_restored_conversation_with_cli_subagent_snapshot_for_test(
+            conversation_id,
+            block_id.clone(),
+            task_id.clone(),
+            b"ssh session output",
+        );
+        let serialized_blocks = serialized_blocks_for_restored_cli_subagent_for_test(&conversation);
+
+        let terminal = add_window_with_terminal(&mut app, Some(&serialized_blocks));
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(conversation),
+                true,
+                ctx,
+            );
+        });
+
+        // 恢复后应存在 CLI subagent 视图。
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.cli_subagent_views.contains_key(&block_id),
+                "restored CLI subagent view should exist before FinishedSubagent"
+            );
+        });
+
+        // 模拟 SSH 会话结束触发的 FinishedSubagent 事件。
+        // 修复前：live 视图被 remove 后不再重建，卡片消失；
+        // 修复后：在 block 仍持有匹配 metadata 时以 RestoredReadOnly 重建折叠卡片。
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_cli_subagent_controller_event(
+                view.cli_subagent_controller.clone(),
+                &CLISubagentEvent::FinishedSubagent {
+                    block_id: block_id.clone(),
+                    task_id: task_id.clone(),
+                    conversation_id: Some(conversation_id),
+                    initial_requested_command_action_id: None,
+                },
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.cli_subagent_views.contains_key(&block_id),
+                "FinishedSubagent should keep a read-only CLI subagent card when metadata matches"
+            );
+        });
+    });
+}
+
+#[test]
+fn finished_cli_subagent_skips_rebuild_when_block_missing() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        // 用一个不存在于 block_list 的 block_id 触发 FinishedSubagent，
+        // 模拟 block 已被回收 / metadata 无法匹配的情况，重建前置检查应不通过。
+        let block_id = BlockId::from("cli-block-gone".to_string());
+        let task_id = TaskId::new("cli-task-gone".to_string());
+        let conversation_id = AIConversationId::new();
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_cli_subagent_controller_event(
+                view.cli_subagent_controller.clone(),
+                &CLISubagentEvent::FinishedSubagent {
+                    block_id: block_id.clone(),
+                    task_id: task_id.clone(),
+                    conversation_id: Some(conversation_id),
+                    initial_requested_command_action_id: None,
+                },
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                !view.cli_subagent_views.contains_key(&block_id),
+                "FinishedSubagent should not rebuild a card when the block no longer exists"
             );
         });
     });
