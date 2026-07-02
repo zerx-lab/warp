@@ -3086,12 +3086,38 @@ impl TerminalView {
                     // LRC conversations should only have one entry point (the original LRC block).
                     let has_existing_lrc_block =
                         me.has_existing_lrc_agent_view_block(*conversation_id);
+                    let has_existing_agent_view_entry_block =
+                        me.has_agent_view_entry_block_for_conversation(*conversation_id);
+                    let is_restored_existing_conversation_origin = matches!(
+                        origin,
+                        AgentViewEntryOrigin::ConversationListView
+                            | AgentViewEntryOrigin::RestoreExistingConversation
+                            | AgentViewEntryOrigin::AgentViewBlock
+                            | AgentViewEntryOrigin::ConversationSelector
+                            | AgentViewEntryOrigin::InlineHistoryMenu
+                            | AgentViewEntryOrigin::InlineConversationMenu
+                    );
+                    let has_conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                        .conversation(conversation_id)
+                        .is_some();
+                    let should_insert_restored_unmodified_entry_card = !was_modified
+                        && !was_new
+                        && !*was_ambient_agent
+                        && is_restored_existing_conversation_origin
+                        && has_conversation
+                        && !is_exit_due_to_user_takeover_of_lrc
+                        && !has_existing_lrc_block
+                        && !has_existing_agent_view_entry_block;
 
                     let should_insert = (!me
                         .last_visible_item_is_agent_view_block_for_conversation(*conversation_id)
                         && was_modified
                         && !is_exit_due_to_user_takeover_of_lrc
                         && !has_existing_lrc_block)
+                        // restored/历史会话只读查看时不会新增 exchange；
+                        // 用户按 ESC 返回 terminal 后仍需要一个 terminal-mode 入口卡片，
+                        // 否则 fullscreen AgentView 退出后所有 Agent block 都会被隐藏。
+                        || should_insert_restored_unmodified_entry_card
                         // If the agent view was entered via accepting a 'new conversation
                         // speedbump', an entry block should always be inserted.
                         || matches!(origin, AgentViewEntryOrigin::AgentRequestedNewConversation);
@@ -3100,7 +3126,7 @@ impl TerminalView {
                             AgentViewEntryBlockParams {
                                 conversation_id: *conversation_id,
                                 is_new: was_new,
-                                is_restored: false, /* is_restored */
+                                is_restored: should_insert_restored_unmodified_entry_card,
                                 origin: *origin,
                                 agent_view_controller: me.agent_view_controller.clone(),
                             },
@@ -19582,6 +19608,18 @@ impl TerminalView {
         }
 
         false
+    }
+
+    /// 返回当前终端里是否已经有该 conversation 的 AgentView 入口卡片。
+    fn has_agent_view_entry_block_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> bool {
+        self.rich_content_views.iter().any(|content| {
+            content
+                .agent_view_entry_metadata()
+                .is_some_and(|metadata| metadata.conversation_id == conversation_id)
+        })
     }
 
     /// Returns true when there exists an AgentViewBlock with origin LongRunningCommand that matches

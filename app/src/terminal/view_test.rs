@@ -446,6 +446,112 @@ fn restores_cli_subagent_terminal_output_from_persisted_snapshot() {
 }
 
 #[test]
+fn exiting_restored_cli_subagent_agent_view_inserts_entry_card() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let conversation_id = AIConversationId::new();
+        let block_id = BlockId::from("cli-block-agent-view-exit".to_string());
+        let task_id = TaskId::new("cli-task-agent-view-exit".to_string());
+        let conversation = build_restored_conversation_with_cli_subagent_snapshot_for_test(
+            conversation_id,
+            block_id.clone(),
+            task_id,
+            b"ssh jump\r\ndocker ps -a\r\nanalyzer-runtime\r\n",
+        );
+        let serialized_blocks = serialized_blocks_for_restored_cli_subagent_for_test(&conversation);
+
+        let terminal = add_window_with_terminal(&mut app, Some(&serialized_blocks));
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(conversation),
+                true,
+                ctx,
+            );
+            view.enter_agent_view_for_conversation(
+                None,
+                AgentViewEntryOrigin::AgentViewBlock,
+                conversation_id,
+                ctx,
+            );
+            view.handle_action(&TerminalAction::ExitAgentView, ctx);
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.last_visible_item_is_agent_view_block_for_conversation(conversation_id),
+                "ESC 返回终端后应保留 restored CLI subagent 的折叠入口卡片"
+            );
+            assert!(
+                view.cli_subagent_views.contains_key(&block_id),
+                "CLI subagent 只读卡片仍应可展开"
+            );
+            let model = view.model.lock();
+            let block = model
+                .block_list()
+                .block_with_id(&block_id)
+                .expect("snapshot-restored command block should exist after exiting agent view");
+            let serialized_block = SerializedBlock::from(block);
+            let output = String::from_utf8_lossy(&serialized_block.stylized_output);
+            assert!(
+                output.contains("analyzer-runtime"),
+                "退出 AgentView 后仍应保留 SSH snapshot 输出: {output}"
+            );
+        });
+    });
+}
+
+fn assert_exiting_restored_ordinary_agent_view_inserts_entry_card(
+    origin: AgentViewEntryOrigin,
+) {
+    App::test((), move |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let conversation = build_restored_conversation_without_cli_subagent_for_test();
+        let conversation_id = conversation.id();
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            // 普通 restored 会话只是在 AgentView 中查看，没有新增 exchange；
+            // ESC 回到 terminal 后仍需要保留一个可再次进入的折叠入口。
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(conversation),
+                true,
+                ctx,
+            );
+            view.enter_agent_view_for_conversation(None, origin, conversation_id, ctx);
+            view.handle_action(&TerminalAction::ExitAgentView, ctx);
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.last_visible_item_is_agent_view_block_for_conversation(conversation_id),
+                "ESC 返回 terminal 后应保留普通 restored /agent 会话的折叠入口卡片"
+            );
+            assert!(
+                view.cli_subagent_views.is_empty(),
+                "普通 restored /agent 会话不应创建 CLI subagent view"
+            );
+        });
+    });
+}
+
+#[test]
+fn exiting_restored_ordinary_agent_view_inserts_entry_card_from_history() {
+    assert_exiting_restored_ordinary_agent_view_inserts_entry_card(
+        AgentViewEntryOrigin::ConversationListView,
+    );
+}
+
+#[test]
+fn exiting_restored_ordinary_agent_view_inserts_entry_card_from_entry_block() {
+    assert_exiting_restored_ordinary_agent_view_inserts_entry_card(
+        AgentViewEntryOrigin::AgentViewBlock,
+    );
+}
+
+#[test]
 fn skips_cli_subagent_view_restore_without_matching_ai_metadata() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -3834,6 +3940,72 @@ fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_runnin
 }
 
 #[test]
+fn exiting_lrc_user_takeover_does_not_insert_agent_view_entry_card() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.init_shell(InitShellValue {
+                    session_id: 0.into(),
+                    shell: "zsh".to_owned(),
+                    ..Default::default()
+                });
+                model.bootstrapped(BootstrappedValue {
+                    shell: "zsh".to_owned(),
+                    ..Default::default()
+                });
+                model.simulate_long_running_block("ssh localhost", "Password:");
+            }
+
+            let conversation_id = view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_inline_agent_view(
+                        None,
+                        AgentViewEntryOrigin::LongRunningCommand,
+                        ctx,
+                    )
+                    .expect("inline agent view should create a conversation")
+            });
+            view.model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_is_agent_tagged_in(true);
+
+            let task_id = TaskId::new("test-task".to_owned());
+            view.model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_agent_interaction_mode_for_agent_monitored_command(&task_id, conversation_id)
+                .expect("tagged-in command should transition to agent-monitored");
+
+            view.cli_subagent_controller.update(ctx, |controller, ctx| {
+                controller.switch_control_to_user(
+                    UserTakeOverReason::TransferFromAgent {
+                        reason: "Enter your password".to_owned(),
+                    },
+                    ctx,
+                );
+            });
+
+            view.agent_view_controller()
+                .update(ctx, |controller, ctx| controller.exit_agent_view(ctx));
+
+            assert!(
+                !view.has_agent_view_entry_block_for_conversation(conversation_id),
+                "LRC 用户接管退出时不应重复插入 AgentView 入口卡片"
+            );
+        });
+    })
+}
+
+#[test]
 fn use_agent_footer_renders_for_transfer_handoff_even_when_user_command_footer_setting_disabled() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -3983,6 +4155,13 @@ fn exiting_agent_view_removes_empty_conversations() {
             history.conversation(&conversation_id).is_some()
         });
         assert!(!exists_after_exit);
+        let has_entry_card_after_exit = terminal.read(&app, |view, _| {
+            view.has_agent_view_entry_block_for_conversation(conversation_id)
+        });
+        assert!(
+            !has_entry_card_after_exit,
+            "新建但未修改的空会话退出后不应留下 restored 入口卡片"
+        );
     })
 }
 
