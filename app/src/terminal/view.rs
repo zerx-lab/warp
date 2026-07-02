@@ -5188,28 +5188,14 @@ impl TerminalView {
             self.cli_subagent_views.len()
         );
 
-        ctx.subscribe_to_view(&subagent_view, |me, view, event, ctx| match event {
-            CLISubagentViewEvent::TextSelected => {
-                // CLI subagent 的文本选择不能和 block list / alt screen 选择并存，
-                // 先清掉终端侧选择，再交给统一的 rich content selection 逻辑收尾。
-                {
-                    let mut model = me.model.lock();
-                    model.block_list_mut().clear_selection();
-                    model.alt_screen_mut().clear_selection();
-                }
-                // 清理临时拖选状态，避免切换到 CLI subagent view 后仍残留旧选择视觉。
-                me.is_selecting = false;
-                me.block_text_selection_start_position = None;
-                me.clear_selected_text_except(Some(view.id()), ctx);
-                ctx.notify();
-            }
-            CLISubagentViewEvent::CopiedEmptyText => {
-                me.copy(ctx);
-            }
-            #[cfg(windows)]
-            CLISubagentViewEvent::WindowsCtrlC => {
-                me.ctrl_c(ctx);
-            }
+        let should_forward_windows_ctrl_c = is_live;
+        ctx.subscribe_to_view(&subagent_view, move |me, view, event, ctx| {
+            me.handle_cli_subagent_view_event(
+                view.id(),
+                event,
+                should_forward_windows_ctrl_c,
+                ctx,
+            );
         });
 
         if is_live {
@@ -5230,6 +5216,40 @@ impl TerminalView {
                         .lock()
                         .block_list_mut()
                         .remove_rich_content(result_ai_block_id);
+                }
+            }
+        }
+    }
+
+    fn handle_cli_subagent_view_event(
+        &mut self,
+        cli_subagent_view_id: EntityId,
+        event: &CLISubagentViewEvent,
+        should_forward_windows_ctrl_c: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            CLISubagentViewEvent::TextSelected => {
+                // CLI subagent 的文本选择不能和 block list / alt screen 选择并存，
+                // 先清掉终端侧选择，再交给统一的 rich content selection 逻辑收尾。
+                {
+                    let mut model = self.model.lock();
+                    model.block_list_mut().clear_selection();
+                    model.alt_screen_mut().clear_selection();
+                }
+                // 清理临时拖选状态，避免切换到 CLI subagent view 后仍残留旧选择视觉。
+                self.is_selecting = false;
+                self.block_text_selection_start_position = None;
+                self.clear_selected_text_except(Some(cli_subagent_view_id), ctx);
+                ctx.notify();
+            }
+            CLISubagentViewEvent::CopiedEmptyText => {
+                self.copy(ctx);
+            }
+            #[cfg(windows)]
+            CLISubagentViewEvent::WindowsCtrlC => {
+                if should_forward_windows_ctrl_c {
+                    self.ctrl_c(ctx);
                 }
             }
         }
