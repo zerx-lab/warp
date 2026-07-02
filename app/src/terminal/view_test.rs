@@ -12,9 +12,11 @@ use warpui::{notification::UserNotification, Presenter, WindowInvalidation};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::task::TaskId;
-use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
 #[cfg(windows)]
 use crate::ai::blocklist::block::cli::CLISubagentViewEvent;
+use crate::ai::blocklist::block::cli_controller::{
+    LongRunningCommandControlState, UserTakeOverReason,
+};
 use crate::ai::blocklist::SerializedBlockListItem;
 use warpui::App;
 
@@ -51,9 +53,12 @@ use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
 use crate::terminal::session_settings::AgentToolbarChipSelection;
 use crate::view_components::find::FindWithinBlockState;
 
+use crate::persistence::model::AgentConversationData;
 use crate::terminal::model::ansi::{self, InitShellValue};
 use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
-use crate::terminal::model::block::BlockId;
+use crate::terminal::model::block::{
+    AgentInteractionMetadata, AgentViewVisibility, BlockId, SerializedAIMetadata, SerializedBlock,
+};
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
 use crate::terminal::model::terminal_model::WithinBlock;
 use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
@@ -203,6 +208,127 @@ fn build_restored_conversation_with_cli_subagent_for_test(
         .expect("restored CLI subagent conversation should build")
 }
 
+fn empty_agent_conversation_data_for_test() -> AgentConversationData {
+    AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: None,
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        parent_conversation_id: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        compaction_state_json: None,
+        byop_repair_state_json: None,
+        cli_subagent_block_snapshots_json: None,
+    }
+}
+
+fn cli_subagent_snapshot_json_for_test(
+    conversation_id: AIConversationId,
+    task_id: &TaskId,
+    block_id: &BlockId,
+    output: &[u8],
+) -> String {
+    // 模拟关闭标签后随 conversation_data 留存的完整终端 block 快照。
+    let mut block = SerializedBlock::new_for_test(b"ssh jump".to_vec(), output.to_vec());
+    block.id = block_id.clone();
+    block.ai_metadata = serde_json::to_string(&Some(Into::<SerializedAIMetadata>::into(
+        AgentInteractionMetadata::new(
+            None,
+            conversation_id,
+            Some(task_id.clone()),
+            Some(LongRunningCommandControlState::Agent {
+                is_blocked: false,
+                should_hide_responses: false,
+            }),
+            false,
+            false,
+        ),
+    )))
+    .ok();
+    block.agent_view_visibility =
+        Some(AgentViewVisibility::new_from_conversation(conversation_id).into());
+
+    serde_json::to_string(&vec![serde_json::json!({
+        "task_id": String::from(task_id.clone()),
+        "block_id": block_id.as_str(),
+        "block": block,
+    })])
+    .expect("CLI subagent snapshot JSON should serialize")
+}
+
+#[allow(deprecated)]
+fn build_restored_conversation_with_cli_subagent_snapshot_for_test(
+    conversation_id: AIConversationId,
+    block_id: BlockId,
+    task_id: TaskId,
+    snapshot_output: &[u8],
+) -> AIConversation {
+    let mut conversation_data = empty_agent_conversation_data_for_test();
+    conversation_data.cli_subagent_block_snapshots_json = Some(
+        cli_subagent_snapshot_json_for_test(conversation_id, &task_id, &block_id, snapshot_output),
+    );
+
+    // task result 故意保留短输出，确保测试验证的是 snapshot 恢复而不是 task fallback。
+    let root_task_id = "root-task";
+    let block_id_string = String::from(block_id);
+    let task_id_string = String::from(task_id);
+    let root_task = create_api_task(
+        root_task_id,
+        vec![
+            tool_call_message_with_tool_for_test(
+                "run-shell-call",
+                "run-shell-call-1",
+                run_shell_command_tool_for_test("ssh jump"),
+            ),
+            tool_call_result_message_with_result_for_test(
+                "run-shell-result",
+                "run-shell-call-1",
+                api::message::tool_call_result::Result::RunShellCommand(
+                    api::RunShellCommandResult {
+                        command: "ssh jump".to_string(),
+                        output: String::new(),
+                        exit_code: 0,
+                        result: Some(api::run_shell_command_result::Result::CommandFinished(
+                            api::ShellCommandFinished {
+                                command_id: block_id_string.clone(),
+                                output: "short task output".to_string(),
+                                exit_code: 0,
+                            },
+                        )),
+                    },
+                ),
+            ),
+            create_subagent_tool_call_message(
+                "cli-subagent-call",
+                root_task_id,
+                &task_id_string,
+                Some(api::message::tool_call::subagent::Metadata::Cli(
+                    api::message::tool_call::subagent::CliSubagent {
+                        command_id: block_id_string,
+                    },
+                )),
+            ),
+        ],
+    );
+    let subtask = create_api_subtask(
+        &task_id_string,
+        root_task_id,
+        vec![create_message("cli-subagent-output", &task_id_string)],
+    );
+
+    AIConversation::new_restored(
+        conversation_id,
+        vec![root_task, subtask],
+        Some(conversation_data),
+    )
+    .expect("restored CLI subagent conversation with snapshot should build")
+}
+
 fn build_restored_conversation_without_cli_subagent_for_test() -> AIConversation {
     // 构造普通 /agent 历史 conversation，用于确认没有 CLI subagent 时不会误建浮窗。
     let root_task_id = "root-task";
@@ -263,6 +389,57 @@ fn restores_cli_subagent_view_from_serialized_history_blocks() {
             assert!(
                 view.cli_subagent_views.contains_key(&block_id),
                 "restored CLI subagent view should be keyed by its command block id"
+            );
+        });
+    });
+}
+
+#[test]
+fn restores_cli_subagent_terminal_output_from_persisted_snapshot() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let conversation_id = AIConversationId::new();
+        let block_id = BlockId::from("cli-block-snapshot".to_string());
+        let task_id = TaskId::new("cli-task-snapshot".to_string());
+        let snapshot_output =
+            b"* Documentation: https://help.ubuntu.com\r\nCONTAINER ID   IMAGE\r\nanalyzer-runtime\r\n";
+        let conversation = build_restored_conversation_with_cli_subagent_snapshot_for_test(
+            conversation_id,
+            block_id.clone(),
+            task_id,
+            snapshot_output,
+        );
+        let serialized_blocks = serialized_blocks_for_restored_cli_subagent_for_test(&conversation);
+
+        let terminal = add_window_with_terminal(&mut app, Some(&serialized_blocks));
+        terminal.update(&mut app, |view, ctx| {
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(conversation),
+                true,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.cli_subagent_views.contains_key(&block_id),
+                "snapshot-restored CLI subagent view should still be expandable"
+            );
+            let model = view.model.lock();
+            let block = model
+                .block_list()
+                .block_with_id(&block_id)
+                .expect("snapshot-restored command block should exist");
+            let serialized_block = SerializedBlock::from(block);
+            let output = String::from_utf8_lossy(&serialized_block.stylized_output);
+            assert!(
+                output.contains("analyzer-runtime"),
+                "restored terminal block should contain persisted SSH output: {output}"
+            );
+            assert!(
+                !output.contains("short task output"),
+                "task fallback output should not replace persisted terminal snapshot"
             );
         });
     });

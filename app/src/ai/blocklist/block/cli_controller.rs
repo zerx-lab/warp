@@ -300,7 +300,9 @@ impl CLISubagentController {
                         .entry(snapshot_block_id.clone())
                         .or_default()
                         .last_snapshot_at = Some(Instant::now());
-                    ctx.emit(CLISubagentEvent::UpdatedLastSnapshot);
+                    ctx.emit(CLISubagentEvent::UpdatedLastSnapshot {
+                        block_id: snapshot_block_id,
+                    });
                 }
 
                 // Zap BYOP: silent_create_for_byop 不 emit CreatedSubtask,这里手动
@@ -354,13 +356,12 @@ impl CLISubagentController {
                     .as_ref()
                     .is_some_and(|state| state.last_snapshot_at.is_some())
                 {
-                    ctx.emit(CLISubagentEvent::UpdatedLastSnapshot);
+                    ctx.emit(CLISubagentEvent::UpdatedLastSnapshot {
+                        block_id: block_id.clone(),
+                    });
                 }
 
-                if removed_subagent_state
-                    .as_ref()
-                    .is_some_and(|state| state.task_id.is_some())
-                {
+                if let Some(task_id) = removed_subagent_state.and_then(|state| state.task_id) {
                     let is_inline_agent_view =
                         me.agent_view_controller.as_ref().is_some_and(|controller| {
                             controller.read(ctx, |controller, _| controller.is_inline())
@@ -382,6 +383,7 @@ impl CLISubagentController {
 
                     ctx.emit(CLISubagentEvent::FinishedSubagent {
                         block_id,
+                        task_id,
                         conversation_id,
                         initial_requested_command_action_id: requested_command_action_id,
                     });
@@ -715,6 +717,7 @@ pub enum CLISubagentEvent {
     // Emitted when a CLI subagent's execution ends.
     FinishedSubagent {
         block_id: BlockId,
+        task_id: TaskId,
         conversation_id: Option<AIConversationId>,
         initial_requested_command_action_id: Option<AIAgentActionId>,
     },
@@ -723,7 +726,9 @@ pub enum CLISubagentEvent {
         requested_command_action_id: Option<AIAgentActionId>,
         agent_has_control: bool,
     },
-    UpdatedLastSnapshot,
+    UpdatedLastSnapshot {
+        block_id: BlockId,
+    },
     ToggledHideResponses,
     /// Emitted when the user hands control back to the agent after a
     /// TransferShellCommandControlToUser action.

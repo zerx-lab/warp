@@ -1070,6 +1070,7 @@ impl BlocklistAIHistoryModel {
             last_event_sequence: None,
             compaction_state_json: None,
             byop_repair_state_json,
+            cli_subagent_block_snapshots_json: None,
         };
         let forked_conversation_id = AIConversationId::new();
         if let Err(e) = sqlite_sender.send(ModelEvent::UpdateMultiAgentConversation {
@@ -1239,6 +1240,7 @@ impl BlocklistAIHistoryModel {
             last_event_sequence: None,
             compaction_state_json: None,
             byop_repair_state_json,
+            cli_subagent_block_snapshots_json: None,
         };
 
         let forked_conversation_id = AIConversationId::new();

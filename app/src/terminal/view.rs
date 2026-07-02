@@ -5255,6 +5255,64 @@ impl TerminalView {
         }
     }
 
+    fn persist_cli_subagent_block_snapshot(
+        &mut self,
+        block_id: &BlockId,
+        conversation_id: Option<AIConversationId>,
+        task_id: Option<TaskId>,
+        requested_command_action_id: Option<AIAgentActionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((block_snapshot, conversation_id, task_id, requested_command_action_id)) = ({
+            let model = self.model.lock();
+            let Some(block) = model.block_list().block_with_id(block_id) else {
+                log::warn!("Cannot persist CLI subagent snapshot; block {block_id:?} not found");
+                return;
+            };
+            let metadata = block.agent_interaction_metadata();
+            let conversation_id =
+                conversation_id.or_else(|| metadata.map(|metadata| *metadata.conversation_id()));
+            let task_id = task_id
+                .or_else(|| metadata.and_then(|metadata| metadata.subagent_task_id().cloned()));
+            let requested_command_action_id = requested_command_action_id.or_else(|| {
+                metadata.and_then(|metadata| metadata.requested_command_action_id().cloned())
+            });
+
+            // 只在持锁期间复制 block 快照，写 conversation 时不持有 TerminalModel 锁。
+            let block_snapshot = SerializedBlock::from(block);
+            conversation_id
+                .zip(task_id)
+                .map(|(conversation_id, task_id)| {
+                    (
+                        block_snapshot,
+                        conversation_id,
+                        task_id,
+                        requested_command_action_id,
+                    )
+                })
+        }) else {
+            log::warn!(
+                "Cannot persist CLI subagent snapshot; block {block_id:?} has no conversation/task metadata"
+            );
+            return;
+        };
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, move |history_model, ctx| {
+            let Some(conversation) = history_model.conversation_mut(&conversation_id) else {
+                log::warn!(
+                    "Cannot persist CLI subagent snapshot; conversation {conversation_id} not found"
+                );
+                return;
+            };
+            conversation.upsert_cli_subagent_block_snapshot(
+                task_id,
+                block_snapshot,
+                requested_command_action_id,
+                ctx,
+            );
+        });
+    }
+
     fn handle_cli_subagent_controller_event(
         &mut self,
         _: ModelHandle<CLISubagentController>,
@@ -5281,6 +5339,13 @@ impl TerminalView {
                     initial_requested_command_action_id.as_ref(),
                     ctx,
                 );
+                self.persist_cli_subagent_block_snapshot(
+                    block_id,
+                    Some(*conversation_id),
+                    Some(task_id.clone()),
+                    initial_requested_command_action_id.clone(),
+                    ctx,
+                );
             }
             CLISubagentEvent::UpdatedControl {
                 agent_has_control, ..
@@ -5293,9 +5358,17 @@ impl TerminalView {
             }
             CLISubagentEvent::FinishedSubagent {
                 block_id,
+                task_id,
                 conversation_id,
-                ..
+                initial_requested_command_action_id,
             } => {
+                self.persist_cli_subagent_block_snapshot(
+                    block_id,
+                    *conversation_id,
+                    Some(task_id.clone()),
+                    initial_requested_command_action_id.clone(),
+                    ctx,
+                );
                 self.cli_subagent_views.remove(block_id);
 
                 if FeatureFlag::AgentView.is_enabled() {
@@ -5332,7 +5405,9 @@ impl TerminalView {
                 }
             }
             CLISubagentEvent::ToggledHideResponses => {}
-            CLISubagentEvent::UpdatedLastSnapshot => {}
+            CLISubagentEvent::UpdatedLastSnapshot { block_id } => {
+                self.persist_cli_subagent_block_snapshot(block_id, None, None, None, ctx);
+            }
             CLISubagentEvent::ControlHandedBackAfterTransfer => {
                 // Notify the shell command executor that control was handed back after transfer.
                 self.ai_action_model

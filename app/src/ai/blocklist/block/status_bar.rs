@@ -236,7 +236,7 @@ impl BlocklistAIStatusBar {
                 | CLISubagentEvent::ToggledHideResponses => {
                     ctx.notify();
                 }
-                CLISubagentEvent::UpdatedLastSnapshot => {
+                CLISubagentEvent::UpdatedLastSnapshot { .. } => {
                     let has_active_snapshot = me.should_refresh_last_read_timer(ctx);
                     if has_active_snapshot {
                         me.start_last_read_timer(ctx);

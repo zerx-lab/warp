@@ -5,14 +5,18 @@ use super::{
     TaskId,
 };
 use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::SerializedBlockListItem;
+use crate::ai::blocklist::{
+    block::cli_controller::LongRunningCommandControlState, SerializedBlockListItem,
+};
 use crate::ai::byop_readiness::{
     InvalidRepairState, RepairRecord, RepairSource, RepairState, RepairStateLoadError,
     RepairStateStatus, ToolCallKey,
 };
 use crate::persistence::model::AgentConversationData;
 use crate::persistence::ModelEvent;
-use crate::terminal::model::block::{AgentInteractionMetadata, SerializedAIMetadata};
+use crate::terminal::model::block::{
+    AgentInteractionMetadata, AgentViewVisibility, SerializedAIMetadata, SerializedBlock,
+};
 use crate::terminal::model::BlockId;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
@@ -197,6 +201,60 @@ fn cli_subagent_tool(subtask_id: &str, command_id: &str) -> api::message::tool_c
             },
         )),
     })
+}
+
+fn empty_agent_conversation_data_for_test() -> AgentConversationData {
+    AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: None,
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        parent_conversation_id: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        compaction_state_json: None,
+        byop_repair_state_json: None,
+        cli_subagent_block_snapshots_json: None,
+    }
+}
+
+fn cli_subagent_snapshot_json_for_test(
+    conversation_id: AIConversationId,
+    task_id: &TaskId,
+    block_id: &BlockId,
+    command: &[u8],
+    output: &[u8],
+) -> String {
+    // 模拟已关闭标签后唯一能留在 SQLite conversation_data 里的终端快照。
+    let mut block = SerializedBlock::new_for_test(command.to_vec(), output.to_vec());
+    block.id = block_id.clone();
+    block.ai_metadata = serde_json::to_string(&Some(Into::<SerializedAIMetadata>::into(
+        AgentInteractionMetadata::new(
+            None,
+            conversation_id,
+            Some(task_id.clone()),
+            Some(LongRunningCommandControlState::Agent {
+                is_blocked: false,
+                should_hide_responses: false,
+            }),
+            false,
+            false,
+        ),
+    )))
+    .ok();
+    block.agent_view_visibility =
+        Some(AgentViewVisibility::new_from_conversation(conversation_id).into());
+
+    serde_json::to_string(&vec![serde_json::json!({
+        "task_id": String::from(task_id.clone()),
+        "block_id": block_id.as_str(),
+        "block": block,
+    })])
+    .expect("CLI subagent snapshot JSON should serialize")
 }
 
 fn restored_conversation_with_queries(queries: &[&str]) -> AIConversation {
@@ -487,6 +545,147 @@ fn test_cli_subagent_serialized_block_preserves_block_id_and_metadata() {
 
 #[allow(deprecated)]
 #[test]
+fn test_cli_subagent_serialized_block_prefers_persisted_snapshot_output() {
+    let conversation_id = AIConversationId::new();
+    let cli_task_id = TaskId::new("cli-task-snapshot".to_string());
+    let block_id = BlockId::from("cli-block-snapshot".to_string());
+    let snapshot_output =
+        b"* Documentation: https://help.ubuntu.com\r\nCONTAINER ID   IMAGE\r\nanalyzer-runtime\r\n";
+    let mut conversation_data = empty_agent_conversation_data_for_test();
+    conversation_data.cli_subagent_block_snapshots_json =
+        Some(cli_subagent_snapshot_json_for_test(
+            conversation_id,
+            &cli_task_id,
+            &block_id,
+            b"ssh jump",
+            snapshot_output,
+        ));
+
+    let conversation = AIConversation::new_restored(
+        conversation_id,
+        vec![
+            api::Task {
+                id: "root-task".to_string(),
+                messages: vec![
+                    tool_call_message_with_tool("tool-call-1", "call-1", run_shell_command_tool()),
+                    tool_call_result_message_with_result(
+                        "tool-result-1",
+                        "call-1",
+                        api::message::tool_call_result::Result::RunShellCommand(
+                            api::RunShellCommandResult {
+                                command: "ssh jump".to_string(),
+                                output: String::new(),
+                                exit_code: 0,
+                                result: Some(
+                                    api::run_shell_command_result::Result::CommandFinished(
+                                        api::ShellCommandFinished {
+                                            command_id: String::from(block_id.clone()),
+                                            output: "truncated task output".to_string(),
+                                            exit_code: 0,
+                                        },
+                                    ),
+                                ),
+                            },
+                        ),
+                    ),
+                    tool_call_message_with_tool(
+                        "subagent-call-1",
+                        "subagent-call-1",
+                        cli_subagent_tool(&String::from(cli_task_id.clone()), block_id.as_str()),
+                    ),
+                ],
+                dependencies: None,
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+            api::Task {
+                id: String::from(cli_task_id.clone()),
+                messages: vec![],
+                dependencies: Some(api::task::Dependencies {
+                    parent_task_id: "root-task".to_string(),
+                }),
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+        ],
+        Some(conversation_data),
+    )
+    .unwrap();
+
+    let blocks = conversation.to_serialized_blocklist_items();
+    let SerializedBlockListItem::Command { block } = &blocks[0];
+    assert_eq!(block.id, block_id);
+    let output = String::from_utf8_lossy(&block.stylized_output);
+    assert!(
+        output.contains("analyzer-runtime"),
+        "restored block should use the persisted SSH terminal snapshot: {output}"
+    );
+    assert!(
+        !output.contains("truncated task output"),
+        "task-message output must not overwrite the richer terminal snapshot"
+    );
+}
+
+#[allow(deprecated)]
+#[test]
+fn test_cli_subagent_serialized_block_restores_snapshot_without_command_result() {
+    let conversation_id = AIConversationId::new();
+    let cli_task_id = TaskId::new("cli-task-snapshot-only".to_string());
+    let block_id = BlockId::from("cli-block-snapshot-only".to_string());
+    let mut conversation_data = empty_agent_conversation_data_for_test();
+    conversation_data.cli_subagent_block_snapshots_json =
+        Some(cli_subagent_snapshot_json_for_test(
+            conversation_id,
+            &cli_task_id,
+            &block_id,
+            b"ssh jump",
+            b"Last login: Wed Jul 1\r\ndocker ps -a\r\n",
+        ));
+
+    let conversation = AIConversation::new_restored(
+        conversation_id,
+        vec![
+            api::Task {
+                id: "root-task".to_string(),
+                messages: vec![tool_call_message_with_tool(
+                    "subagent-call-1",
+                    "subagent-call-1",
+                    cli_subagent_tool(&String::from(cli_task_id.clone()), block_id.as_str()),
+                )],
+                dependencies: None,
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+            api::Task {
+                id: String::from(cli_task_id.clone()),
+                messages: vec![],
+                dependencies: Some(api::task::Dependencies {
+                    parent_task_id: "root-task".to_string(),
+                }),
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+        ],
+        Some(conversation_data),
+    )
+    .unwrap();
+
+    let blocks = conversation.to_serialized_blocklist_items();
+    assert_eq!(blocks.len(), 1);
+    let SerializedBlockListItem::Command { block } = &blocks[0];
+    assert_eq!(block.id, block_id);
+    assert!(
+        String::from_utf8_lossy(&block.stylized_output).contains("docker ps -a"),
+        "snapshot-only CLI subagent history should still restore terminal output"
+    );
+}
+
+#[allow(deprecated)]
+#[test]
 fn test_cli_subagent_serialized_block_ignores_later_attachment_and_context_blocks() {
     let cli_task_id = TaskId::new("cli-task-attachment-context".to_string());
     let conversation = AIConversation::new_restored(
@@ -495,11 +694,7 @@ fn test_cli_subagent_serialized_block_ignores_later_attachment_and_context_block
             api::Task {
                 id: "root-task".to_string(),
                 messages: vec![
-                    tool_call_message_with_tool(
-                        "tool-call-1",
-                        "call-1",
-                        run_shell_command_tool(),
-                    ),
+                    tool_call_message_with_tool("tool-call-1", "call-1", run_shell_command_tool()),
                     tool_call_result_message_with_result(
                         "tool-result-1",
                         "call-1",
@@ -556,7 +751,9 @@ fn test_cli_subagent_serialized_block_ignores_later_attachment_and_context_block
     let blocks = conversation.to_serialized_blocklist_items();
     assert_eq!(blocks.len(), 3);
 
-    let SerializedBlockListItem::Command { block: run_shell_block } = &blocks[0];
+    let SerializedBlockListItem::Command {
+        block: run_shell_block,
+    } = &blocks[0];
     assert_eq!(run_shell_block.id, BlockId::from("cli-block-1".to_string()));
     let run_shell_metadata = run_shell_block
         .ai_metadata
@@ -578,7 +775,10 @@ fn test_cli_subagent_serialized_block_ignores_later_attachment_and_context_block
         "cat attachment.txt"
     );
     assert!(attachment_block.ai_metadata.is_none());
-    assert_ne!(attachment_block.id, BlockId::from("cli-block-1".to_string()));
+    assert_ne!(
+        attachment_block.id,
+        BlockId::from("cli-block-1".to_string())
+    );
 
     let SerializedBlockListItem::Command {
         block: context_block,
@@ -601,11 +801,7 @@ fn test_cli_subagent_serialized_block_uses_metadata_command_id_not_latest_comman
             api::Task {
                 id: "root-task".to_string(),
                 messages: vec![
-                    tool_call_message_with_tool(
-                        "tool-call-1",
-                        "call-1",
-                        run_shell_command_tool(),
-                    ),
+                    tool_call_message_with_tool("tool-call-1", "call-1", run_shell_command_tool()),
                     tool_call_result_message_with_result(
                         "tool-result-1",
                         "call-1",
@@ -626,11 +822,7 @@ fn test_cli_subagent_serialized_block_uses_metadata_command_id_not_latest_comman
                             },
                         ),
                     ),
-                    tool_call_message_with_tool(
-                        "tool-call-2",
-                        "call-2",
-                        run_shell_command_tool(),
-                    ),
+                    tool_call_message_with_tool("tool-call-2", "call-2", run_shell_command_tool()),
                     tool_call_result_message_with_result(
                         "tool-result-2",
                         "call-2",
@@ -690,13 +882,19 @@ fn test_cli_subagent_serialized_block_uses_metadata_command_id_not_latest_comman
         .expect("CLI subagent metadata should attach to the referenced command block");
     let first_agent_metadata: AgentInteractionMetadata = first_metadata.into();
     assert_eq!(first_agent_metadata.subagent_task_id(), Some(&cli_task_id));
-    assert_eq!(String::from_utf8_lossy(&first_block.stylized_output), "first");
+    assert_eq!(
+        String::from_utf8_lossy(&first_block.stylized_output),
+        "first"
+    );
 
     let SerializedBlockListItem::Command {
         block: second_block,
     } = &blocks[1];
     assert_ne!(second_block.id, BlockId::from("cli-block-1".to_string()));
-    assert_eq!(String::from_utf8_lossy(&second_block.stylized_output), "second");
+    assert_eq!(
+        String::from_utf8_lossy(&second_block.stylized_output),
+        "second"
+    );
     let second_metadata = second_block
         .ai_metadata
         .as_ref()

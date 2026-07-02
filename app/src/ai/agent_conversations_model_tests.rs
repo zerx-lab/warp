@@ -154,6 +154,7 @@ fn test_display_status_uses_matching_conversation_for_in_progress_task() {
                 last_event_sequence: None,
                 compaction_state_json: None,
                 byop_repair_state_json: None,
+                cli_subagent_block_snapshots_json: None,
             },
         );
 
@@ -207,6 +208,7 @@ fn test_display_status_updates_when_blocked_conversation_resumes() {
                 last_event_sequence: None,
                 compaction_state_json: None,
                 byop_repair_state_json: None,
+                cli_subagent_block_snapshots_json: None,
             },
         );
 
@@ -284,6 +286,7 @@ fn test_display_status_terminal_task_state_overrides_matching_conversation() {
                 last_event_sequence: None,
                 compaction_state_json: None,
                 byop_repair_state_json: None,
+                cli_subagent_block_snapshots_json: None,
             },
         );
 
@@ -337,6 +340,7 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                 last_event_sequence: None,
                 compaction_state_json: None,
                 byop_repair_state_json: None,
+                cli_subagent_block_snapshots_json: None,
             },
         );
 
@@ -620,6 +624,7 @@ fn test_get_tasks_and_conversations_prefers_task_when_task_id_matches_conversati
                 last_event_sequence: None,
                 compaction_state_json: None,
                 byop_repair_state_json: None,
+                cli_subagent_block_snapshots_json: None,
             },
         );
 
@@ -679,6 +684,7 @@ fn test_get_tasks_and_conversations_prefers_task_when_server_token_matches() {
                 last_event_sequence: None,
                 compaction_state_json: None,
                 byop_repair_state_json: None,
+                cli_subagent_block_snapshots_json: None,
             },
         );
 
@@ -737,6 +743,7 @@ fn test_get_tasks_and_conversations_keeps_unrelated_tasks_and_conversations() {
                 last_event_sequence: None,
                 compaction_state_json: None,
                 byop_repair_state_json: None,
+                cli_subagent_block_snapshots_json: None,
             },
         );
 

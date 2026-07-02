@@ -1037,6 +1037,7 @@ impl TerminalView {
             last_event_sequence: None,
             compaction_state_json: None,
             byop_repair_state_json: None,
+            cli_subagent_block_snapshots_json: None,
         };
 
         match AIConversation::new_restored(conversation_id, tasks, Some(conversation_data)) {
