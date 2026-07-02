@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 
+use chrono::TimeZone;
 use futures::FutureExt;
 use itertools::Itertools as _;
 use persistence::model::AgentConversationRecord;
@@ -60,6 +61,7 @@ pub fn convert_persisted_conversation_to_ai_conversation_with_metadata(
             AgentConversationRecord {
                 conversation_id,
                 conversation_data,
+                last_modified_at,
                 ..
             },
     } = persisted_conversation;
@@ -75,7 +77,13 @@ pub fn convert_persisted_conversation_to_ai_conversation_with_metadata(
     let conversation_data = serde_json::from_str::<AgentConversationData>(&conversation_data).ok();
 
     match AIConversation::new_restored(conversation_id, tasks, conversation_data) {
-        Ok(conversation) => Some(conversation),
+        Ok(mut conversation) => {
+            // 持久化 Task 里的旧消息可能没有 CurrentTime/timestamp,恢复 exchange 时会退到
+            // Unix epoch。SQLite 行级更新时间是这个会话最后写入的可靠兜底时间。
+            let fallback_timestamp = chrono::Local.from_utc_datetime(&last_modified_at);
+            conversation.repair_default_restored_exchange_timestamps(fallback_timestamp);
+            Some(conversation)
+        }
         Err(e) => {
             log::debug!("Skipping persisted conversation (legacy/incomplete): {e:?}");
             None

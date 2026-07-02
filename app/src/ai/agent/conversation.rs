@@ -1,8 +1,8 @@
 use crate::ai::agent::comment::CodeReview;
-use crate::ai::blocklist::block::cli_controller::LongRunningCommandControlState;
 use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::block::cli_controller::LongRunningCommandControlState;
 use crate::ai::blocklist::{RequestInput, ResponseStreamId, SerializedBlockListItem};
 use crate::ai::byop_readiness::RepairStateStatus;
 use crate::code_review::CodeReviewTelemetryEvent;
@@ -624,6 +624,45 @@ impl AIConversation {
             self.task_store.modify_task(&task_id, |task| {
                 task.reassign_exchange_ids();
             });
+        }
+    }
+
+    fn is_default_restored_timestamp(timestamp: DateTime<Local>) -> bool {
+        timestamp.timestamp() == 0 && timestamp.timestamp_subsec_nanos() == 0
+    }
+
+    pub(crate) fn repair_default_restored_exchange_timestamps(
+        &mut self,
+        fallback_timestamp: DateTime<Local>,
+    ) {
+        let exchange_ids_to_repair: Vec<_> = self
+            .task_store
+            .all_exchanges()
+            .filter(|exchange| {
+                Self::is_default_restored_timestamp(exchange.start_time)
+                    || exchange
+                        .finish_time
+                        .is_some_and(Self::is_default_restored_timestamp)
+            })
+            .map(|exchange| exchange.id)
+            .collect();
+
+        for exchange_id in exchange_ids_to_repair {
+            let Some(exchange) = self.task_store.exchange_mut(exchange_id) else {
+                continue;
+            };
+
+            // 旧数据或本地合成消息可能没有 CurrentTime/timestamp,恢复时会落到 Unix epoch。
+            // 只修正这种默认值,避免覆盖消息中已经恢复出的真实时间。
+            if Self::is_default_restored_timestamp(exchange.start_time) {
+                exchange.start_time = fallback_timestamp;
+            }
+            if exchange
+                .finish_time
+                .is_some_and(Self::is_default_restored_timestamp)
+            {
+                exchange.finish_time = Some(fallback_timestamp);
+            }
         }
     }
 

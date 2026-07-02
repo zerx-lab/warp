@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use itertools::Itertools;
 use warpui::{App, EntityId};
 
@@ -18,7 +18,13 @@ use crate::{
         llms::LLMId,
     },
     input_suggestions::HistoryInputSuggestion,
-    persistence::{model::PersistedAutoexecuteMode, ModelEvent},
+    persistence::{
+        model::{
+            AgentConversation, AgentConversationData, AgentConversationRecord,
+            PersistedAutoexecuteMode,
+        },
+        ModelEvent,
+    },
     terminal::model::session::SessionId,
     test_util::settings::initialize_settings_for_tests,
     GlobalResourceHandles, GlobalResourceHandlesProvider,
@@ -26,8 +32,8 @@ use crate::{
 use warp_multi_agent_api as api;
 
 use super::{
-    AIConversationMetadata, AIQueryHistoryOutputStatus, BlocklistAIHistoryModel, PersistedAIInput,
-    PersistedAIInputType,
+    convert_persisted_conversation_to_ai_conversation_with_metadata, AIConversationMetadata,
+    AIQueryHistoryOutputStatus, BlocklistAIHistoryModel, PersistedAIInput, PersistedAIInputType,
 };
 
 fn initialize_history_model_test_app(app: &mut App) {
@@ -105,6 +111,75 @@ fn byop_test_task(task_id: &str, messages: Vec<api::Message>) -> api::Task {
     }
 }
 
+fn empty_agent_conversation_data_for_test() -> AgentConversationData {
+    AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: None,
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        parent_conversation_id: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        compaction_state_json: None,
+        byop_repair_state_json: None,
+        cli_subagent_block_snapshots_json: None,
+    }
+}
+
+fn timestamp_from_local_time(time: DateTime<Local>) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: time.timestamp(),
+        nanos: time.timestamp_subsec_nanos() as i32,
+    }
+}
+
+fn persisted_agent_conversation_for_test(
+    conversation_id: AIConversationId,
+    last_modified_at: chrono::NaiveDateTime,
+    messages: Vec<api::Message>,
+) -> AgentConversation {
+    AgentConversation {
+        conversation: AgentConversationRecord {
+            id: 1,
+            conversation_id: conversation_id.to_string(),
+            conversation_data: serde_json::to_string(&empty_agent_conversation_data_for_test())
+                .expect("test conversation data should serialize"),
+            last_modified_at,
+        },
+        tasks: vec![byop_test_task("root-task", messages)],
+    }
+}
+
+fn byop_user_query_message(
+    message_id: &str,
+    request_id: &str,
+    query: &str,
+    current_time: Option<DateTime<Local>>,
+) -> api::Message {
+    api::Message {
+        id: message_id.to_owned(),
+        task_id: "root-task".to_owned(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+            query: query.to_owned(),
+            context: current_time.map(|time| api::InputContext {
+                current_time: Some(timestamp_from_local_time(time)),
+                ..Default::default()
+            }),
+            referenced_attachments: Default::default(),
+            mode: None,
+            intended_agent: Default::default(),
+        })),
+        request_id: request_id.to_owned(),
+        timestamp: None,
+    }
+}
+
 fn byop_tool_call_message(task_id: &str, message_id: &str, call_id: &str) -> api::Message {
     api::Message {
         id: message_id.to_owned(),
@@ -136,6 +211,61 @@ fn byop_tool_result_message(task_id: &str, message_id: &str, call_id: &str) -> a
         request_id: "request-1".to_owned(),
         timestamp: None,
     }
+}
+
+#[test]
+fn persisted_conversation_uses_record_timestamp_when_restored_messages_have_no_time() {
+    let conversation_id = AIConversationId::new();
+    let fallback_time = Utc
+        .with_ymd_and_hms(2026, 7, 2, 7, 13, 11)
+        .unwrap()
+        .naive_utc();
+    let persisted_conversation = persisted_agent_conversation_for_test(
+        conversation_id,
+        fallback_time,
+        vec![byop_user_query_message(
+            "user-query-1",
+            "request-1",
+            "restore me",
+            None,
+        )],
+    );
+
+    let restored =
+        convert_persisted_conversation_to_ai_conversation_with_metadata(persisted_conversation)
+            .expect("persisted conversation should restore");
+
+    let restored_time = restored
+        .last_modified_at()
+        .expect("restored conversation should have an exchange timestamp");
+    assert_eq!(restored_time, Local.from_utc_datetime(&fallback_time));
+    assert_ne!(restored_time, Local.timestamp_opt(0, 0).single().unwrap());
+}
+
+#[test]
+fn persisted_conversation_keeps_restored_message_time_when_present() {
+    let conversation_id = AIConversationId::new();
+    let fallback_time = Utc
+        .with_ymd_and_hms(2026, 7, 2, 7, 13, 11)
+        .unwrap()
+        .naive_utc();
+    let message_time = Local.with_ymd_and_hms(2026, 7, 2, 16, 42, 0).unwrap();
+    let persisted_conversation = persisted_agent_conversation_for_test(
+        conversation_id,
+        fallback_time,
+        vec![byop_user_query_message(
+            "user-query-1",
+            "request-1",
+            "restore me",
+            Some(message_time),
+        )],
+    );
+
+    let restored =
+        convert_persisted_conversation_to_ai_conversation_with_metadata(persisted_conversation)
+            .expect("persisted conversation should restore");
+
+    assert_eq!(restored.last_modified_at(), Some(message_time));
 }
 
 #[test]
