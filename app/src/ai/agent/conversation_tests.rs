@@ -591,6 +591,122 @@ fn test_cli_subagent_serialized_block_ignores_later_attachment_and_context_block
     assert_ne!(context_block.id, BlockId::from("cli-block-1".to_string()));
 }
 
+#[allow(deprecated)]
+#[test]
+fn test_cli_subagent_serialized_block_uses_metadata_command_id_not_latest_command() {
+    let cli_task_id = TaskId::new("cli-task-first-command".to_string());
+    let conversation = AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![
+            api::Task {
+                id: "root-task".to_string(),
+                messages: vec![
+                    tool_call_message_with_tool(
+                        "tool-call-1",
+                        "call-1",
+                        run_shell_command_tool(),
+                    ),
+                    tool_call_result_message_with_result(
+                        "tool-result-1",
+                        "call-1",
+                        api::message::tool_call_result::Result::RunShellCommand(
+                            api::RunShellCommandResult {
+                                command: "echo hi".to_string(),
+                                output: String::new(),
+                                exit_code: 0,
+                                result: Some(
+                                    api::run_shell_command_result::Result::CommandFinished(
+                                        api::ShellCommandFinished {
+                                            command_id: "cli-block-1".to_string(),
+                                            output: "first".to_string(),
+                                            exit_code: 0,
+                                        },
+                                    ),
+                                ),
+                            },
+                        ),
+                    ),
+                    tool_call_message_with_tool(
+                        "tool-call-2",
+                        "call-2",
+                        run_shell_command_tool(),
+                    ),
+                    tool_call_result_message_with_result(
+                        "tool-result-2",
+                        "call-2",
+                        api::message::tool_call_result::Result::RunShellCommand(
+                            api::RunShellCommandResult {
+                                command: "echo hi".to_string(),
+                                output: String::new(),
+                                exit_code: 0,
+                                result: Some(
+                                    api::run_shell_command_result::Result::CommandFinished(
+                                        api::ShellCommandFinished {
+                                            command_id: "other-block".to_string(),
+                                            output: "second".to_string(),
+                                            exit_code: 0,
+                                        },
+                                    ),
+                                ),
+                            },
+                        ),
+                    ),
+                    tool_call_message_with_tool(
+                        "subagent-call-1",
+                        "subagent-call-1",
+                        cli_subagent_tool(&String::from(cli_task_id.clone()), "cli-block-1"),
+                    ),
+                ],
+                dependencies: None,
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+            api::Task {
+                id: String::from(cli_task_id.clone()),
+                messages: vec![],
+                dependencies: Some(api::task::Dependencies {
+                    parent_task_id: "root-task".to_string(),
+                }),
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+        ],
+        None,
+    )
+    .unwrap();
+
+    let blocks = conversation.to_serialized_blocklist_items();
+    assert_eq!(blocks.len(), 2);
+
+    let SerializedBlockListItem::Command { block: first_block } = &blocks[0];
+    assert_eq!(first_block.id, BlockId::from("cli-block-1".to_string()));
+    let first_metadata = first_block
+        .ai_metadata
+        .as_ref()
+        .and_then(|json| serde_json::from_str::<Option<SerializedAIMetadata>>(json).ok())
+        .flatten()
+        .expect("CLI subagent metadata should attach to the referenced command block");
+    let first_agent_metadata: AgentInteractionMetadata = first_metadata.into();
+    assert_eq!(first_agent_metadata.subagent_task_id(), Some(&cli_task_id));
+    assert_eq!(String::from_utf8_lossy(&first_block.stylized_output), "first");
+
+    let SerializedBlockListItem::Command {
+        block: second_block,
+    } = &blocks[1];
+    assert_ne!(second_block.id, BlockId::from("cli-block-1".to_string()));
+    assert_eq!(String::from_utf8_lossy(&second_block.stylized_output), "second");
+    let second_metadata = second_block
+        .ai_metadata
+        .as_ref()
+        .and_then(|json| serde_json::from_str::<Option<SerializedAIMetadata>>(json).ok())
+        .flatten()
+        .expect("second command should keep requested-command metadata");
+    let second_agent_metadata: AgentInteractionMetadata = second_metadata.into();
+    assert_eq!(second_agent_metadata.subagent_task_id(), None);
+}
+
 #[test]
 fn fork_artifacts_adds_file_artifacts_to_conversation() {
     let proto_artifact = api::message::artifact_event::ConversationArtifact {

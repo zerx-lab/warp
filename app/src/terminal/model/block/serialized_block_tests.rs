@@ -61,3 +61,40 @@ fn from_json_accepts_integer_array_bytes() {
     assert_eq!(block.stylized_command, b"echo hello");
     assert_eq!(block.stylized_output, b"hello world");
 }
+
+#[test]
+fn serialized_ai_metadata_defaults_missing_should_hide_block_to_true() {
+    let conversation_id = AIConversationId::new();
+    let json = serde_json::json!({
+        "requested_command_action_id": null,
+        "conversation_id": conversation_id,
+        "subagent_task_id": null,
+        "long_running_control_state": null,
+        "has_agent_written_to_block": false
+    });
+
+    let metadata: SerializedAIMetadata = serde_json::from_value(json).unwrap();
+    let agent_metadata: AgentInteractionMetadata = metadata.into();
+
+    assert!(agent_metadata.should_hide_block());
+}
+
+#[test]
+fn serialized_ai_metadata_preserves_explicit_visible_block() {
+    let metadata = SerializedAIMetadata::from(AgentInteractionMetadata::new(
+        None,
+        AIConversationId::new(),
+        Some(TaskId::new("cli-task-1".to_string())),
+        None,
+        false,
+        false,
+    ));
+
+    let json = serde_json::to_value(&metadata).unwrap();
+    assert_eq!(json["should_hide_block"], false);
+
+    let restored_metadata: SerializedAIMetadata = serde_json::from_value(json).unwrap();
+    let agent_metadata: AgentInteractionMetadata = restored_metadata.into();
+
+    assert!(!agent_metadata.should_hide_block());
+}

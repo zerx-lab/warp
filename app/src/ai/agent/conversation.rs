@@ -3182,9 +3182,9 @@ impl AIConversation {
         messages: &[api::Message],
         command_blocks: &mut Vec<CommandBlockInfo>,
     ) {
-        // 只跟踪当前 messages 扫描里最近一次由 RunShellCommand 创建的命令块，
-        // 避免后续 attachment/context 生成的块被 CLI subagent 误绑定。
-        let mut last_run_shell_command_block_index = None;
+        // 记录每个 RunShellCommand 的稳定 command id，CLI subagent 会用这个 id
+        // 指向实际被接管的命令块，不能只按最近一条命令猜测。
+        let mut run_shell_command_block_indices_by_id = HashMap::new();
 
         // Build a map from tool_call_id to (RunShellCommandResult, result_message_id)
         // for efficient lookup within this message set.
@@ -3238,9 +3238,9 @@ impl AIConversation {
                     {
                         if let Some(api::run_shell_command_result::Result::CommandFinished(
                             api::ShellCommandFinished {
+                                command_id,
                                 output: command_output,
                                 exit_code,
-                                ..
                             },
                         )) = &cmd_result.result
                         {
@@ -3264,20 +3264,23 @@ impl AIConversation {
                                 subagent_task_id: None,
                                 message_id: (*result_message_id).to_string(),
                             });
-                            last_run_shell_command_block_index =
-                                command_blocks.len().checked_sub(1);
+                            if let Some(index) = command_blocks.len().checked_sub(1) {
+                                run_shell_command_block_indices_by_id
+                                    .insert(command_id.clone(), index);
+                            }
                         }
                     }
                 }
 
-                // CLI subagent 紧跟在命令 tool call 之后时，把稳定 block id 和 subtask id
-                // 回填到最近生成的命令块，供历史恢复时重建只读关联。
+                // CLI subagent metadata 中的 command_id 是恢复时的真实关联源。
+                // 同一组 messages 里可能有多条命令，必须按 command_id 精确回填。
                 if let Some(subagent) = tool_call.subagent() {
                     if let Some(api::message::tool_call::subagent::Metadata::Cli(cli)) =
                         &subagent.metadata
                     {
-                        if let Some(command_block) = last_run_shell_command_block_index
-                            .and_then(|index| command_blocks.get_mut(index))
+                        if let Some(command_block) = run_shell_command_block_indices_by_id
+                            .get(&cli.command_id)
+                            .and_then(|index| command_blocks.get_mut(*index))
                         {
                             command_block.block_id = Some(BlockId::from(cli.command_id.clone()));
                             command_block.subagent_task_id =
