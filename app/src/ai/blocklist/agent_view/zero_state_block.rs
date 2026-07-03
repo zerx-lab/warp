@@ -842,7 +842,11 @@ fn render_recent_conversations_section(
                         .with_margin_right(8.)
                         .finish(),
                         Text::new_inline(
-                            format_approx_duration_from_now_utc(last_updated.to_utc()),
+                            if last_updated.timestamp() <= 0 {
+                                "Never".to_owned()
+                            } else {
+                                format_approx_duration_from_now_utc(last_updated.to_utc())
+                            },
                             appearance.ui_font_family(),
                             appearance.monospace_font_size() - 1.,
                         )
