@@ -21,9 +21,9 @@ base-ref: 5c145ccd27925c6710d6f6194a0f6817866dbc52
 **文件:**
 - Modify: `app/src/terminal/view/init.rs:153-157`
 
-- [ ] **1.1 在 `insert` 绑定后添加 `shift-insert` 绑定**
+- [x] **1.1 在 `cmd_or_ctrl_shift("v")` Paste 绑定后添加 `shift-insert` 绑定**
 
-在 `app/src/terminal/view/init.rs` 第 157 行（`insert` 绑定的右大括号后加逗号）之后、第 158 行（`delete` 绑定）之前，插入：
+在 `app/src/terminal/view/init.rs` 第 275 行（Paste 绑定右大括号）之后、第 276 行（Copy 绑定）之前，插入：
 
 ```rust
         FixedBinding::new(
@@ -33,14 +33,13 @@ base-ref: 5c145ccd27925c6710d6f6194a0f6817866dbc52
         ),
 ```
 
-- [ ] **1.2 `cargo check` 验证**
+- [x] **1.2 `cargo check` 验证**
 
 Run: `cargo check -p warp`
-Expected: 编译通过，无警告。
+通过。
 
-- [ ] **1.3 提交**
+- [x] **1.3 提交**
 
 ```bash
-git add app/src/terminal/view/init.rs
-git commit -m "feat(terminal): add shift-insert paste keybinding"
+git add -A && git commit -m "feat(terminal): add shift-insert paste keybinding"
 ```
