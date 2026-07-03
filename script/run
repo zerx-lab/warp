@@ -20,7 +20,11 @@ OS_TYPE="$(uname -s)"
 
 FEATURES="gui"
 
-./script/install_channel_config || echo "Skipping internal channel config installation (no repo access)."
+if [ -f ./script/install_channel_config ]; then
+    ./script/install_channel_config
+else
+    echo "Skipping internal channel config installation (no repo access)."
+fi
 
 # If warp_channel_config is on PATH, build the Local channel binary; otherwise build the OSS channel.
 if command -v warp-channel-config &>/dev/null; then

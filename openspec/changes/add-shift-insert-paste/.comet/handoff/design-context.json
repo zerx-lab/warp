@@ -1,0 +1,13 @@
+{
+  "change": "add-shift-insert-paste",
+  "phase": "design",
+  "mode": "compact",
+  "canonical_spec": "openspec",
+  "generated_by": "comet-handoff.sh",
+  "context_hash": "59e4474b4b669d48c93db23b187e6f90d04d1cce4cf6dc972de207598a0c7247",
+  "files": [
+    { "path": "openspec/changes/add-shift-insert-paste/proposal.md", "sha256": "959c3766749f99845aea5026369a8cdc050bc457d93b6f047d206bd4b00b3327" },
+    { "path": "openspec/changes/add-shift-insert-paste/design.md", "sha256": "b155667517265e16492fef64161cb3defa02717b8ace36591e9b4a63f683a053" },
+    { "path": "openspec/changes/add-shift-insert-paste/tasks.md", "sha256": "17399468e3d093d90dfa5d9d972dc1a216857df0f4cbf6c07fbf507ab46cb331" }
+  ]
+}
