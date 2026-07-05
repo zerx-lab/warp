@@ -635,3 +635,23 @@ fn diagnostic_coalescing_uses_request_local_safe_key() {
     assert!(message.contains("trigger_layer=controller_preflight"));
     assert!(message.contains("request_attempt_id=attempt-1"));
 }
+
+#[test]
+fn smoke_blocked_readiness_error_uses_user_facing_copy() {
+    let report = classify(vec![assistant_with_one_call()]);
+    assert!(
+        matches!(
+            report.state,
+            ReadinessState::MissingResultWithoutRepairSource { .. }
+        ),
+        "missing tool result should not be Ready: {:?}",
+        report.state
+    );
+
+    let error = BlockedByopReadinessError::new(report.state.category());
+    assert_eq!(
+        error.to_string(),
+        BLOCKED_BYOP_REQUEST_MESSAGE,
+        "blocked readiness must surface the stable user-facing copy"
+    );
+}

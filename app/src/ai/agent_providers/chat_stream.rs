@@ -6868,6 +6868,56 @@ mod serializer_readiness_tests {
 
         assert_build_request_blocked(params, "MissingResultWithoutRepairSource");
     }
+
+    #[test]
+    fn smoke_build_chat_request_simple_user_query_succeeds() {
+        let params = request_params(
+            vec![make_user_query_message("task-1", "req-1", "hello".to_owned(), &[])],
+            vec![user_query_input("hello")],
+        );
+        let request = build_openai_request(&params).expect("simple user query should serialize");
+        assert!(
+            !request.messages.is_empty(),
+            "expected at least one chat message"
+        );
+        assert_request_has_no_repair_placeholder(&request);
+    }
+
+    #[test]
+    fn smoke_build_chat_request_pending_live_tool_call_is_pending_not_blocked() {
+        let user_message = make_user_query_message("task-1", "req-1", "hi".to_owned(), &[]);
+        let tool_call_message = make_tool_call_message("task-1", "req-1", "call-1", shell_tool());
+        let assistant_message_id = tool_call_message.id.clone();
+        let params = request_params(
+            vec![user_message, tool_call_message],
+            vec![user_query_input("continue")],
+        );
+
+        let pending_report = classify_byop_controller_readiness_with_live_tool_calls(
+            &params,
+            vec![LiveToolCall::new(
+                ToolCallRef::new(
+                    ToolCallKey::new("task-1", assistant_message_id, "call-1"),
+                    kind(),
+                ),
+                LiveToolCallState::Running,
+            )],
+        );
+        assert!(
+            matches!(
+                pending_report.state,
+                ReadinessState::PendingToolResults { .. }
+            ),
+            "running tool should wait, not block: {:?}",
+            pending_report.state
+        );
+
+        let build_result = build_openai_request(&params);
+        assert!(
+            build_result.is_err(),
+            "serializer must not send while tool is still running"
+        );
+    }
 }
 
 /// **accepted history repair outbound 修复行为验证**:

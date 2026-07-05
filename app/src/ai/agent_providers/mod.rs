@@ -24,6 +24,10 @@ pub mod tools;
 pub mod user_context;
 
 #[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;
+
+#[cfg(test)]
 mod cache_stability_tests;
 
 // 当前外部使用点:
