@@ -1183,6 +1183,7 @@ fn build_chat_request(
     let plan_mode = is_plan_mode_turn(&params.input);
     let tool_names = available_tool_names(params);
     let mut system_text = prompt_renderer::render_system(
+        api_type,
         &params.model,
         agent_ctx,
         &tool_names,
@@ -3256,6 +3257,7 @@ pub async fn generate_byop_output(
     let client = build_client(api_type, base_url, api_key);
     let request_id = Uuid::new_v4().to_string();
     let mcp_context = params.mcp_context.clone();
+    let tool_names_for_extract = available_tool_names(&params);
 
     // ⚠️ BYOP 持久化关键:warp 自家路径下,以下 ClientAction 都是 server 端 emit
     // 让 client 端把 UserQuery / ToolCallResult 等"非模型产出"的 message
@@ -3609,6 +3611,12 @@ pub async fn generate_byop_output(
         let mut tool_chunk_count: u32 = 0;
         let mut end_count: u32 = 0;
         let mut other_count: u32 = 0;
+        let mut captured_assistant_text: Option<String> = None;
+        let mut captured_reasoning_text: Option<String> = None;
+        // Ollama 等 provider 的 End.captured_content 有时为空,但 Chunk 事件已送达正文;
+        // 流式累积作为 content→tool 提取的可靠来源。
+        let mut streamed_assistant_text = String::new();
+        let mut streamed_reasoning_text = String::new();
         // 累积本轮 token 使用量。genai 在 ChatStreamEvent::End 事件里携带
         // captured_usage(Option<Usage>),其 prompt_tokens 是本轮整段 history
         // (Anthropic / OpenAI 都按"完整请求 prompt"计),completion_tokens 是模型输出。
@@ -3665,6 +3673,7 @@ pub async fn generate_byop_output(
                 ChatStreamEvent::Chunk(c) if !c.content.is_empty() => {
                     chunk_count += 1;
                     chunk_bytes += c.content.len();
+                    streamed_assistant_text.push_str(&c.content);
                     if use_think_extraction {
                         // <think> 标签流式提取:仅对 THINK_TAG_IN_CONTENT_MODELS 白名单内的模型激活。
                         // 把 /delta/content 中的 <think>...</think> 段路由到 reasoning 通道,
@@ -3754,6 +3763,7 @@ pub async fn generate_byop_output(
                 ChatStreamEvent::ReasoningChunk(c) if !c.content.is_empty() => {
                     reasoning_count += 1;
                     reasoning_bytes += c.content.len();
+                    streamed_reasoning_text.push_str(&c.content);
                     // 运行时 latch:该 (api_type, model_id) 发过 reasoning chunk →
                     // 标记下一轮起强制 echo reasoning_content,覆盖 INTERLEAVED_RULES
                     // 静态表外的任意国产/第三方 thinking 模型(对齐 opencode 数据驱动思路,
@@ -3859,6 +3869,11 @@ pub async fn generate_byop_output(
                     // 优先用 captured_content 里的 tool_calls(更完整),
                     // 否则用 streaming 中累积的 tool_bufs。
                     if let Some(content) = end.captured_content.as_ref() {
+                        if let Some(text) = content.first_text() {
+                            if !text.is_empty() {
+                                captured_assistant_text = Some(text.to_owned());
+                            }
+                        }
                         let mut captured_order: Vec<String> = Vec::new();
                         for call in content.tool_calls() {
                             if !captured_order.contains(&call.call_id) {
@@ -3873,6 +3888,11 @@ pub async fn generate_byop_output(
                                 }
                             }
                             tool_order = captured_order;
+                        }
+                    }
+                    if let Some(reasoning) = end.captured_reasoning_content.as_ref() {
+                        if !reasoning.is_empty() {
+                            captured_reasoning_text = Some(reasoning.clone());
                         }
                     }
                     if let Some(usage) = end.captured_usage.as_ref() {
@@ -3909,12 +3929,64 @@ pub async fn generate_byop_output(
             }
         }
 
+        if tool_bufs.is_empty() {
+            let extract_sources: [&str; 4] = [
+                streamed_assistant_text.as_str(),
+                captured_assistant_text.as_deref().unwrap_or(""),
+                streamed_reasoning_text.as_str(),
+                captured_reasoning_text.as_deref().unwrap_or(""),
+            ];
+            let mut parsed_any_text = false;
+            for text in extract_sources.into_iter().filter(|t| !t.is_empty()) {
+                parsed_any_text = true;
+                let extracted = super::content_tool_calls::extract_tool_calls_from_assistant_text(
+                    text,
+                    &tool_names_for_extract,
+                );
+                if extracted.is_empty() {
+                    continue;
+                }
+                log::info!(
+                    "[byop] content_tool_extract: found={} names={:?} source_len={}",
+                    extracted.len(),
+                    extracted
+                        .iter()
+                        .map(|call| call.fn_name.as_str())
+                        .collect::<Vec<_>>(),
+                    text.len()
+                );
+                for call in extracted {
+                    let call_id = call.call_id.clone();
+                    if !tool_bufs.contains_key(&call_id) {
+                        tool_order.push(call_id.clone());
+                    }
+                    tool_bufs.insert(call_id, call);
+                }
+                break;
+            }
+            if tool_bufs.is_empty() && parsed_any_text {
+                log::info!(
+                    "[byop] content_tool_extract: no tools parsed \
+                     (streamed={}B captured={}B reasoning_streamed={}B reasoning_captured={}B)",
+                    streamed_assistant_text.len(),
+                    captured_assistant_text.as_ref().map(|t| t.len()).unwrap_or(0),
+                    streamed_reasoning_text.len(),
+                    captured_reasoning_text.as_ref().map(|t| t.len()).unwrap_or(0),
+                );
+            } else if tool_bufs.is_empty() {
+                log::warn!(
+                    "[byop] content_tool_extract: skipped — no assistant text in stream \
+                     (chunks={chunk_count} reasoning={reasoning_count})"
+                );
+            }
+        }
+
         // 流统计 INFO log。chunk_count=0 && tool_count=0 时上游返回为空,
         // 大概率是 model_id 不被识别 / max_tokens 缺失 / Anthropic API 兼容代理返回 200 但 body 空。
         let total_tools = tool_bufs.len();
         log::info!(
             "[byop] stream stats: start={start_count} chunks={chunk_count} ({chunk_bytes}B) \
-             reasoning={reasoning_count} ({reasoning_bytes}B) tool_chunks={tool_chunk_count} \
+             reasoning={reasoning_count} ({reasoning_bytes}B) native_tool_chunks={tool_chunk_count} \
              ends={end_count} other={other_count} captured_tools={total_tools}"
         );
         // P0-6 prompt cache 命中率日志(只在 provider 返回 cache 字段时打)。
