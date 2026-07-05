@@ -785,7 +785,7 @@ impl AgentProviderApiType {
             Self::OpenAiResp => "https://api.openai.com/v1/",
             Self::Gemini => "https://generativelanguage.googleapis.com/v1beta/",
             Self::Anthropic => "https://api.anthropic.com/v1/",
-            Self::Ollama => "http://localhost:11434/v1/",
+            Self::Ollama => "http://localhost:11434/",
             Self::DeepSeek => "https://api.deepseek.com/v1/",
         }
     }
