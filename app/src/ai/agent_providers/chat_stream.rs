@@ -14,7 +14,7 @@
 //! | OpenAi         | OpenAI       | https://api.openai.com/v1                      |
 //! | OpenAiResp     | OpenAIResp   | https://api.openai.com/v1 (走 /v1/responses)   |
 //! | Gemini         | Gemini       | https://generativelanguage.googleapis.com/v1beta |
-//! | Anthropic      | Anthropic    | https://api.anthropic.com                      |
+//! | Anthropic      | Anthropic    | https://api.anthropic.com/v1 (走 /v1/messages) |
 //! | Ollama         | Ollama       | http://localhost:11434                         |
 //!
 //! 用户填的 `base_url` 始终覆盖默认。这样:
@@ -1832,6 +1832,7 @@ fn log_chat_request_details(
     chat_req: &ChatRequest,
     model_id: &str,
     api_type: AgentProviderApiType,
+    base_url: &str,
 ) {
     let system_in_head = matches!(api_type, AgentProviderApiType::Anthropic)
         && chat_req
@@ -1849,7 +1850,7 @@ fn log_chat_request_details(
         "[byop-diag] request summary: adapter={:?} model={} system_len={} \
          system_in_messages_head={} messages={} tools={} tool_names={:?} \
          previous_response_id_present={} store={:?} system_snippet={:?}",
-        adapter_kind_for(api_type),
+        effective_adapter_kind_for(api_type, model_id, base_url),
         model_id,
         chat_req.system.as_deref().map(str::len).unwrap_or(0),
         system_in_head,
@@ -2807,6 +2808,51 @@ fn adapter_kind_for(api_type: AgentProviderApiType) -> AdapterKind {
     }
 }
 
+/// OpenAI 官方 gpt-5 / codex / pro 系在带 function tools + reasoning_effort 时
+/// 只接受 `/v1/responses`,`/v1/chat/completions` 会 400。
+fn openai_model_requires_responses_api(model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    id.starts_with("gpt-5")
+        || (id.starts_with("gpt") && (id.contains("codex") || id.contains("pro")))
+        || id.starts_with("codex")
+}
+
+/// Claude model id 启发式(容忍 `anthropic/claude-sonnet-4-6` 等 namespace 前缀)。
+fn is_claude_model(model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    let bare = id.rsplit('/').next().unwrap_or(&id);
+    bare.contains("claude-") || bare.starts_with("claude")
+}
+
+/// `base_url` 是否指向 Anthropic 官方 Messages API host。
+fn is_anthropic_api_host(base_url: &str) -> bool {
+    url::Url::parse(base_url.trim())
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "api.anthropic.com" || host.ends_with(".anthropic.com"))
+}
+
+/// 按用户配置的 `api_type`、model id 与 `base_url` 解析实际应使用的 genai adapter。
+///
+/// - `OpenAi` + gpt-5.4 等 → `OpenAIResp`(`/v1/responses`)
+/// - `OpenAi` + `api.anthropic.com` + claude 模型 → `Anthropic`(`/v1/messages`)
+fn effective_adapter_kind_for(
+    api_type: AgentProviderApiType,
+    model_id: &str,
+    base_url: &str,
+) -> AdapterKind {
+    let base = adapter_kind_for(api_type);
+    if api_type == AgentProviderApiType::OpenAi {
+        if is_anthropic_api_host(base_url) && is_claude_model(model_id) {
+            return AdapterKind::Anthropic;
+        }
+        if openai_model_requires_responses_api(model_id) {
+            return AdapterKind::OpenAIResp;
+        }
+    }
+    base
+}
+
 /// 规范化用户填写的 `base_url`,产出供 genai adapter 拼接 service path 的 endpoint URL。
 ///
 /// genai 0.6.x 所有 adapter 都假设 endpoint 以 `/` 结尾、且已经包含版本路径段:
@@ -2821,6 +2867,9 @@ fn adapter_kind_for(api_type: AgentProviderApiType) -> AdapterKind {
 ///    Gemini→`/v1beta/`,Ollama 不补)。
 /// 2. 完整带版本路径(`https://ai.zerx.dev/v1`)— 仅补尾 `/`,不动 path。
 /// 3. 留空 — 用 [`AgentProviderApiType::default_base_url`]。
+///
+/// Anthropic 额外容错:用户若粘贴完整 endpoint(`…/v1/messages`),剥掉尾部的
+/// `messages` 段,避免 genai 再拼一次变成 `…/messages/messages`。
 fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> String {
     let trimmed = base_url.trim();
     if trimmed.is_empty() {
@@ -2828,13 +2877,32 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
     }
 
     // 解析失败(用户填了畸形 URL)→ 退化到原"补尾 /"行为,让上游报错而不是这里 panic。
-    let parsed = match url::Url::parse(trimmed) {
+    let mut parsed = match url::Url::parse(trimmed) {
         Ok(u) => u,
         Err(_) => {
             let stripped = trimmed.trim_end_matches('/');
             return format!("{stripped}/");
         }
     };
+
+    if api_type == AgentProviderApiType::Anthropic || is_anthropic_api_host(trimmed) {
+        let path = parsed.path().trim_end_matches('/');
+        if let Some(prefix) = path.strip_suffix("/messages") {
+            let new_path = if prefix.is_empty() { "/" } else { prefix };
+            parsed.set_path(&format!("{new_path}/"));
+        }
+    }
+
+    // Ollama 原生 API 在 host 根 `/api/chat`,没有 `/v1/` 前缀。历史 default_base_url
+    // 误填 `/v1/` 或用户从 OpenAI 习惯带入的 `/v1` 在这里剥掉,避免拼成 `/v1/api/chat`。
+    if api_type == AgentProviderApiType::Ollama {
+        let path = parsed.path().trim_end_matches('/');
+        if path.is_empty() || path == "/" || path == "/v1" {
+            let mut normalized = parsed.clone();
+            normalized.set_path("/");
+            return normalized.to_string();
+        }
+    }
 
     // path == "/" 或为空 → 用户只填了 host,自动补上 api_type 默认版本路径段。
     if parsed.path() == "/" || parsed.path().is_empty() {
@@ -2848,7 +2916,8 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
     }
 
     // 用户已自带 path → 仅确保尾随 `/`(genai format!/Url::join 都依赖)。
-    let stripped = trimmed.trim_end_matches('/');
+    let normalized = parsed.to_string();
+    let stripped = normalized.trim_end_matches('/');
     format!("{stripped}/")
 }
 
@@ -2857,18 +2926,37 @@ fn normalize_endpoint_url(api_type: AgentProviderApiType, base_url: &str) -> Str
 /// 都强制路由到指定 AdapterKind,完全绕过 genai 默认的"按模型名识别"。
 pub(super) fn build_client(
     api_type: AgentProviderApiType,
-    base_url: String,
+    base_url: &str,
     api_key: String,
 ) -> Client {
-    let adapter_kind = adapter_kind_for(api_type);
-    let endpoint_url = normalize_endpoint_url(api_type, &base_url);
-    log::info!("[byop] build_client: adapter={adapter_kind:?} endpoint_url={endpoint_url}");
+    let endpoint_url = normalize_endpoint_url(api_type, base_url);
+    log::info!(
+        "[byop] build_client: api_type={api_type:?} endpoint_url={endpoint_url}"
+    );
     let key_for_resolver = api_key.clone();
     let resolver = ServiceTargetResolver::from_resolver_fn(
         move |service_target: ServiceTarget| -> Result<ServiceTarget, genai::resolver::Error> {
             let ServiceTarget { model, .. } = service_target;
             let endpoint = Endpoint::from_owned(endpoint_url.clone());
             let auth = AuthData::from_single(key_for_resolver.clone());
+            let model_name = model.model_name.as_str();
+            let adapter_kind = effective_adapter_kind_for(api_type, model_name, &endpoint_url);
+            if api_type == AgentProviderApiType::OpenAi
+                && adapter_kind == AdapterKind::OpenAIResp
+            {
+                log::info!(
+                    "[byop] auto-upgrade OpenAi → OpenAIResp for model={model_name} \
+                     (function tools + reasoning_effort require /v1/responses)"
+                );
+            }
+            if api_type == AgentProviderApiType::OpenAi
+                && adapter_kind == AdapterKind::Anthropic
+            {
+                log::info!(
+                    "[byop] auto-upgrade OpenAi → Anthropic for model={model_name} \
+                     (official Anthropic host requires /v1/messages)"
+                );
+            }
             // 用我们指定的 AdapterKind 覆盖 genai 的"按模型名"识别结果,
             // 但保留 model_name 以便上游服务正确寻址模型。
             let model = ModelIden::new(adapter_kind, model.model_name);
@@ -3277,7 +3365,7 @@ pub async fn generate_byop_output(
             Some(conversation_id.as_str())
         },
     );
-    let client = build_client(api_type, base_url, api_key);
+    let client = build_client(api_type, &base_url, api_key);
     let request_id = Uuid::new_v4().to_string();
     let mcp_context = params.mcp_context.clone();
     let tool_names_for_extract = available_tool_names(&params);
@@ -3322,7 +3410,7 @@ pub async fn generate_byop_output(
     // 推到 messages[0] 以便打 `cache_control`，所以 `chat_req.system` 会是 None、`system_len`
     // 显示为 0；实际 system 内容仍然在 messages[0] 里(看下面逐条报告)。为避免误
     // 导诊断者，这里加上 `system_in_messages_head` 提示。
-    log_chat_request_details(&chat_req, &model_id, api_type);
+    log_chat_request_details(&chat_req, &model_id, api_type, &base_url);
 
     // 诊断:构造包含 system / messages / tools 的完整 ChatRequest JSON dump,保存到
     // stream 闭包。真实 Anthropic wire body 会由 genai adapter 再转换一层,但这里已经
@@ -5547,6 +5635,115 @@ mod build_chat_options_off_tests {
         // gpt-4o 不在 reasoning 名单,Off 也跳过
         let o = opts(AgentProviderApiType::OpenAi, "gpt-4o", R::Off);
         assert!(o.reasoning_effort.is_none());
+    }
+}
+
+#[cfg(test)]
+mod adapter_routing_tests {
+    use super::*;
+    use genai::adapter::AdapterKind;
+
+    const OPENAI_HOST: &str = "https://api.openai.com/v1/";
+    const ANTHROPIC_HOST: &str = "https://api.anthropic.com/v1/";
+    const OPENROUTER_HOST: &str = "https://openrouter.ai/api/v1/";
+
+    #[test]
+    fn openai_gpt54_auto_upgrades_to_responses_api() {
+        assert_eq!(
+            effective_adapter_kind_for(AgentProviderApiType::OpenAi, "gpt-5.4", OPENAI_HOST),
+            AdapterKind::OpenAIResp
+        );
+    }
+
+    #[test]
+    fn openai_gpt4o_stays_on_chat_completions() {
+        assert_eq!(
+            effective_adapter_kind_for(AgentProviderApiType::OpenAi, "gpt-4o", OPENAI_HOST),
+            AdapterKind::OpenAI
+        );
+    }
+
+    #[test]
+    fn openai_resp_api_type_unchanged() {
+        assert_eq!(
+            effective_adapter_kind_for(
+                AgentProviderApiType::OpenAiResp,
+                "gpt-5.4",
+                OPENAI_HOST
+            ),
+            AdapterKind::OpenAIResp
+        );
+    }
+
+    #[test]
+    fn openai_claude_on_anthropic_host_auto_upgrades() {
+        assert_eq!(
+            effective_adapter_kind_for(
+                AgentProviderApiType::OpenAi,
+                "claude-sonnet-4-6",
+                ANTHROPIC_HOST
+            ),
+            AdapterKind::Anthropic
+        );
+    }
+
+    #[test]
+    fn openai_claude_on_openrouter_stays_openai() {
+        assert_eq!(
+            effective_adapter_kind_for(
+                AgentProviderApiType::OpenAi,
+                "anthropic/claude-sonnet-4-6",
+                OPENROUTER_HOST
+            ),
+            AdapterKind::OpenAI
+        );
+    }
+
+    #[test]
+    fn anthropic_api_type_unchanged() {
+        assert_eq!(
+            effective_adapter_kind_for(
+                AgentProviderApiType::Anthropic,
+                "claude-opus-4-7",
+                ANTHROPIC_HOST
+            ),
+            AdapterKind::Anthropic
+        );
+    }
+}
+
+#[cfg(test)]
+mod anthropic_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn host_only_gets_v1_prefix() {
+        assert_eq!(
+            normalize_endpoint_url(AgentProviderApiType::Anthropic, "https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/"
+        );
+    }
+
+    #[test]
+    fn strips_trailing_messages_path() {
+        assert_eq!(
+            normalize_endpoint_url(
+                AgentProviderApiType::Anthropic,
+                "https://api.anthropic.com/v1/messages"
+            ),
+            "https://api.anthropic.com/v1/"
+        );
+    }
+
+    #[test]
+    fn strips_messages_even_when_api_type_openai_but_host_is_anthropic() {
+        assert_eq!(
+            normalize_endpoint_url(
+                AgentProviderApiType::OpenAi,
+                "https://api.anthropic.com/v1/messages"
+            ),
+            "https://api.anthropic.com/v1/"
+        );
     }
 }
 

@@ -668,7 +668,7 @@ pub enum AgentProviderApiType {
     OpenAiResp,
     /// Google Gemini 原生协议(generativelanguage.googleapis.com)。
     Gemini,
-    /// Anthropic Messages API 原生协议(api.anthropic.com)。
+    /// Anthropic Messages API 原生协议(`POST /v1/messages`,默认 `api.anthropic.com/v1/`)。
     Anthropic,
     /// Ollama 原生协议(本地或自建 Ollama)。
     Ollama,

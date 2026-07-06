@@ -98,7 +98,7 @@ pub async fn byop_oneshot_completion(
     user: &str,
     opts: &OneshotOptions,
 ) -> anyhow::Result<String> {
-    let client = chat_stream::build_client(cfg.api_type, cfg.base_url.clone(), cfg.api_key.clone());
+    let client = chat_stream::build_client(cfg.api_type, &cfg.base_url, cfg.api_key.clone());
     let (chat_req, chat_opts) = build_oneshot_request(cfg, system, user, opts);
 
     let resp = client
@@ -119,7 +119,7 @@ pub async fn byop_oneshot_streaming_completion(
     user: &str,
     opts: &OneshotOptions,
 ) -> anyhow::Result<String> {
-    let client = chat_stream::build_client(cfg.api_type, cfg.base_url.clone(), cfg.api_key.clone());
+    let client = chat_stream::build_client(cfg.api_type, &cfg.base_url, cfg.api_key.clone());
     let (chat_req, chat_opts) = build_oneshot_request(cfg, system, user, opts);
     let mut resp = client
         .exec_chat_stream(&cfg.model_id, chat_req, Some(&chat_opts))
