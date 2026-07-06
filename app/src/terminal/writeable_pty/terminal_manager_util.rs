@@ -99,6 +99,16 @@ pub fn wire_up_pty_controller_with_view<T: EventLoopSender>(
                     controller.run_native_shell_completions(buffer_text.clone(), results_tx.clone(), ctx);
                 });
             }
+            view::Event::ZmodemTransferPaths(paths) => {
+                controller.update(ctx, |controller, ctx| {
+                    controller.send_zmodem_transfer_paths(paths.clone(), ctx);
+                });
+            }
+            view::Event::AbortZmodemSilently => {
+                controller.update(ctx, |controller, ctx| {
+                    controller.abort_zmodem_silently(ctx);
+                });
+            }
             _ => {}
         }
     });

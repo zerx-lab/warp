@@ -17,6 +17,7 @@ use crate::terminal::model_events::AnsiHandlerEvent;
 use crate::terminal::view::LINEFEED_REGEX;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::writeable_pty::bootstrap_file::{permanent_bootstrap_file, TempBootstrapFile};
+use crate::terminal::zmodem::ZmodemTransferPaths;
 use crate::terminal::{
     bootstrap,
     line_editor_status::{LineEditorStatus, LineEditorStatusEvent},
@@ -649,6 +650,24 @@ impl<T: EventLoopSender> PtyController<T> {
     /// Shuts down the pty and event loop.
     pub fn shutdown_pty(&mut self, ctx: &mut ModelContext<Self>) {
         self.send_message_to_event_loop(Message::Shutdown, ctx);
+    }
+
+    pub fn send_zmodem_transfer_paths(
+        &mut self,
+        paths: ZmodemTransferPaths,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        log::debug!(
+            "Sending ZMODEM transfer paths to PTY event loop: direction={:?}, path_count={}",
+            paths.direction,
+            paths.paths.len()
+        );
+        self.send_message_to_event_loop(Message::ZmodemTransferPaths(paths), ctx);
+    }
+
+    pub fn abort_zmodem_silently(&mut self, ctx: &mut ModelContext<Self>) {
+        log::debug!("Silently aborting any in-band ZMODEM session in PTY event loop");
+        self.send_message_to_event_loop(Message::AbortZmodemSilently, ctx);
     }
 
     /// Sends a message to the event loop thread requesting a PTY write for the given `bytes`.

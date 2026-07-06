@@ -59,7 +59,9 @@ pub enum ReadHistoryContentsError {
     PowerShellError(anyhow::Error),
 
     #[cfg(windows)]
-    #[error("Error running PowerShell commands and reading from filesystem to read history file. PowerShell error: {powershell_error}, filesystem error: {async_fs_error}")]
+    #[error(
+        "Error running PowerShell commands and reading from filesystem to read history file. PowerShell error: {powershell_error}, filesystem error: {async_fs_error}"
+    )]
     PowerShellAndAsyncFsError {
         powershell_error: anyhow::Error,
         async_fs_error: std::io::Error,
@@ -703,7 +705,11 @@ impl SessionInfo {
         let shell_type = match ShellType::from_name(bootstrapped_value.shell.as_str()) {
             Some(value) => {
                 if value != self.shell.shell_type() {
-                    log::error!("Received ShellType {:?} in BootstrappedValue that conflicts with pending ShellType {:?}", value, self.shell.shell_type());
+                    log::error!(
+                        "Received ShellType {:?} in BootstrappedValue that conflicts with pending ShellType {:?}",
+                        value,
+                        self.shell.shell_type()
+                    );
                 }
                 value
             }
@@ -974,6 +980,17 @@ impl Session {
             self.info.is_legacy_ssh_session,
             IsLegacySSHSession::Yes { .. }
         )
+    }
+
+    pub fn legacy_ssh_socket_path(&self) -> Option<&PathBuf> {
+        match &self.info.is_legacy_ssh_session {
+            IsLegacySSHSession::Yes { socket_path } => Some(socket_path),
+            IsLegacySSHSession::No => None,
+        }
+    }
+
+    pub fn spawning_session_id(&self) -> Option<SessionId> {
+        self.info.spawning_session_id
     }
 
     pub fn is_subshell_or_ssh(&self) -> bool {
@@ -1640,6 +1657,11 @@ pub mod testing {
             self
         }
 
+        pub fn with_spawning_session_id(mut self, session_id: impl Into<SessionId>) -> Self {
+            self.spawning_session_id = Some(session_id.into());
+            self
+        }
+
         pub fn with_keywords(mut self, keywords: Vec<SmolStr>) -> Self {
             self.keywords = keywords;
             self
@@ -1726,7 +1748,9 @@ pub mod testing {
                 .set(external_commands_with_values(commands))
                 .is_err()
             {
-                log::warn!("Ignored call to set_external_commands, as external commands had already been set!");
+                log::warn!(
+                    "Ignored call to set_external_commands, as external commands had already been set!"
+                );
             };
         }
 

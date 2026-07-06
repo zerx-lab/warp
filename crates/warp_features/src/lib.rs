@@ -672,6 +672,9 @@ pub enum FeatureFlag {
     /// 本地 PTY 输出密码提示时展示已保存的 SSH 凭据候选。
     OneKeyPrompt,
 
+    /// 在本地 PTY 会话中启用兼容 lrzsz 的 ZMODEM 传输。
+    Lrzsz,
+
     /// Enables summary mode in vertical tabs, showing condensed tab summaries
     /// instead of individual pane rows.
     VerticalTabsSummaryMode,

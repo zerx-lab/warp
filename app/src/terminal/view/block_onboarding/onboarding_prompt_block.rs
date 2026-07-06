@@ -4,15 +4,16 @@ use crate::report_if_error;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{PromptChoice, TelemetryEvent};
 use crate::settings::EnforceMinimumContrast;
+use crate::terminal::SizeInfo;
 use crate::terminal::blockgrid_element::BlockGridElement;
-use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::block_onboarding::util;
-use crate::terminal::SizeInfo;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use settings::Setting as _;
 use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
     elements::{
         Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, Flex,
         FormattedTextElement, HighlightedHyperlink, Hoverable, HyperlinkUrl, MainAxisAlignment,
@@ -21,7 +22,6 @@ use warpui::{
     fonts::Weight,
     platform::Cursor,
     ui_components::components::{UiComponent, UiComponentStyles},
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
 const CONFIRM_MARGIN_TOP: f32 = 16.;
@@ -66,8 +66,7 @@ impl OnboardingPromptBlock {
         const LINE_ONE: &str = "Next, let’s set up your prompt. Zap has a custom prompt builder or you can select PS1 to honor your pre-existing prompt configuration.";
         const LINE_TWO: &str =
             "Zap works with many custom prompts like oh-my-zsh, Starship, Powerlevel10K. ";
-        const LINK_DESTINATION: &str =
-            "";
+        const LINK_DESTINATION: &str = "";
 
         Flex::column()
             .with_children([
@@ -93,7 +92,9 @@ impl OnboardingPromptBlock {
                         font_color.into_solid(),
                         self.learn_more_highlight_index.clone(),
                     )
-                    .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+                    .with_heading_to_font_size_multipliers(
+                        appearance.heading_font_size_multipliers().clone(),
+                    )
                     .with_hyperlink_font_color(current_theme.accent().into_solid())
                     .register_default_click_handlers(|url, ctx, _| {
                         ctx.dispatch_typed_action(OnboardingPromptBlockAction::HyperlinkClick(url));

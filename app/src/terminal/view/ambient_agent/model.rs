@@ -8,11 +8,11 @@ use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::ambient_agents::spawn::{spawn_task, AmbientAgentEvent};
+use crate::ai::ambient_agents::spawn::{AmbientAgentEvent, spawn_task};
 use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::ambient_agents::{
     AgentConfigSnapshot, AmbientAgentTaskId, AmbientAgentTaskState, AttachmentInput,
-    SpawnAgentRequest, OUT_OF_CREDITS_TASK_FAILURE_MESSAGE, SERVER_OVERLOADED_TASK_FAILURE_MESSAGE,
+    OUT_OF_CREDITS_TASK_FAILURE_MESSAGE, SERVER_OVERLOADED_TASK_FAILURE_MESSAGE, SpawnAgentRequest,
 };
 use crate::ai::api_error::AIApiError;
 use crate::ai::blocklist::BlocklistAIHistoryModel;

@@ -16,14 +16,14 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warpui::elements::FormattedTextElement;
 
 use crate::ai::blocklist::code_block::{
-    render_code_block_plain, CodeBlockOptions, CodeSnippetButtonHandles,
+    CodeBlockOptions, CodeSnippetButtonHandles, render_code_block_plain,
 };
 use crate::appearance::Appearance;
-use crate::terminal::cli_agent_sessions::plugin_manager::PluginInstructions;
 use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_sessions::plugin_manager::PluginInstructions;
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 use crate::view_components::DismissibleToast;
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 use crate::workspace::{ToastStack, WorkspaceAction};
 
 pub(crate) struct PluginInstructionsBlock {
@@ -114,7 +114,9 @@ impl PluginInstructionsBlock {
                 theme.nonactive_ui_text_color().into_solid(),
                 Default::default(),
             )
-            .with_heading_to_font_size_multipliers(appearance.heading_font_size_multipliers().clone())
+            .with_heading_to_font_size_multipliers(
+                appearance.heading_font_size_multipliers().clone(),
+            )
             .with_hyperlink_font_color(theme.accent().into())
             .register_default_click_handlers_with_action_support(|hyperlink, _evt, app| {
                 if let HyperlinkLens::Url(url) = hyperlink {

@@ -2,21 +2,21 @@
 use std::sync::mpsc::SyncSender;
 
 #[cfg(feature = "local_tty")]
-use warpui::geometry::vector::Vector2F;
-#[cfg(feature = "local_tty")]
 use warpui::ModelHandle;
 use warpui::ViewContext;
 #[cfg(not(target_family = "wasm"))]
 use warpui::ViewHandle;
+#[cfg(feature = "local_tty")]
+use warpui::geometry::vector::Vector2F;
 
 #[cfg(feature = "local_tty")]
 use crate::pane_group::TerminalViewResources;
 #[cfg(feature = "local_tty")]
 use crate::persistence::ModelEvent;
 #[cfg(feature = "local_tty")]
-use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
-#[cfg(feature = "local_tty")]
 use crate::terminal::TerminalManager;
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
 
 use super::TerminalView;
 #[cfg(feature = "remote_tty")]

@@ -1024,6 +1024,18 @@ impl RemoteServerManager {
         self.sessions.get(&session_id)
     }
 
+    /// Returns the SSH ControlMaster path backing this session, when the
+    /// transport provided one.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn control_path_for_session(&self, session_id: SessionId) -> Option<&PathBuf> {
+        match self.sessions.get(&session_id) {
+            Some(RemoteSessionState::Initializing { control_path, .. })
+            | Some(RemoteSessionState::Connected { control_path, .. })
+            | Some(RemoteSessionState::Reconnecting { control_path, .. }) => control_path.as_ref(),
+            Some(RemoteSessionState::Connecting | RemoteSessionState::Disconnected) | None => None,
+        }
+    }
+
     /// Returns `true` when the session exists and is in a state where the
     /// remote server might still deliver data (`Connecting`, `Initializing`,
     /// `Connected`, or `Reconnecting`). Returns `false` for `Disconnected`

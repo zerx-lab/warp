@@ -23,6 +23,7 @@ use crate::terminal::ssh::error::SshErrorBlockAction;
 use crate::terminal::view::RichContentSecretTooltipInfo;
 use crate::terminal::view::inline_banner::AgentModeSetupSpeedbumpBannerAction;
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
+use crate::terminal::zmodem::{ZmodemDirection, ZmodemTransferPaths};
 use crate::workflows::workflow::Workflow;
 use crate::{
     server::ids::SyncId,
@@ -319,6 +320,13 @@ pub enum TerminalAction {
     /// it if possible.
     SelectAIAttachedBlock(BlockIndex),
     DragAndDropFiles(Vec<String>),
+    ZmodemTransferPathsSelected(ZmodemTransferPaths),
+    ZmodemFilePickerError {
+        direction: ZmodemDirection,
+        message: String,
+    },
+    CancelZmodemTransfer(ZmodemDirection),
+    DismissZmodemTransfer,
     /// Triggers an ssh session to warpify, even if there is no Warpify Block.
     WarpifySSHSession,
     NotifySshErrorBlock(SshErrorBlockAction),
@@ -581,6 +589,14 @@ impl fmt::Debug for TerminalAction {
             ExecuteRewindFromInlineMenu { .. } => write!(f, "ExecuteRewindFromInlineMenu"),
             SelectAIAttachedBlock(_) => write!(f, "SelectAIAttachedBlock"),
             DragAndDropFiles(_) => write!(f, "DragAndDropFiles"),
+            ZmodemTransferPathsSelected(paths) => {
+                write!(f, "ZmodemTransferPathsSelected({paths:?})")
+            }
+            ZmodemFilePickerError { direction, message } => {
+                write!(f, "ZmodemFilePickerError({direction:?}, {message})")
+            }
+            CancelZmodemTransfer(direction) => write!(f, "CancelZmodemTransfer({direction:?})"),
+            DismissZmodemTransfer => write!(f, "DismissZmodemTransfer"),
             WarpifySSHSession => write!(f, "WarpifySSHSession"),
             NotifySshErrorBlock(action) => write!(f, "NotifySshErrorBlock({action:?})"),
             SetInputModeAgent => write!(f, "SetInputModeAgent"),

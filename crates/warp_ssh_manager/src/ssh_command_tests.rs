@@ -98,10 +98,12 @@ fn test_connection_requires_password_for_password_auth() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(test_connection(&s, None));
     assert_eq!(result.status, ConnectionStatus::Offline);
-    assert!(result
-        .error_message
-        .unwrap()
-        .contains("Password not provided"));
+    assert!(
+        result
+            .error_message
+            .unwrap()
+            .contains("Password not provided")
+    );
 }
 
 #[test]
@@ -111,10 +113,12 @@ fn test_connection_requires_password_for_onekey_auth() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(test_connection(&s, None));
     assert_eq!(result.status, ConnectionStatus::Offline);
-    assert!(result
-        .error_message
-        .unwrap()
-        .contains("Password not provided"));
+    assert!(
+        result
+            .error_message
+            .unwrap()
+            .contains("Password not provided")
+    );
 }
 
 #[test]
@@ -368,6 +372,36 @@ fn windows_password_auth_uses_askpass_not_stdin() {
     // 这里只验证 AskpassSession 类型存在 + 可 new — 跑不起来(需要写文件),
     // 但能挡住"误删 AskpassSession"这类破坏。
     let _ = std::any::type_name::<AskpassSession>();
+}
+
+#[cfg(windows)]
+#[test]
+fn askpass_session_applies_env_to_blocking_command() {
+    use std::ffi::OsStr;
+    use zeroize::Zeroizing;
+
+    let password: Zeroizing<String> = Zeroizing::new("dummy-pw-for-env-test".into());
+    let session = AskpassSession::new(&password).expect("AskpassSession::new failed");
+    let mut cmd = command::blocking::Command::new("ssh");
+    session.apply_env_blocking(&mut cmd);
+
+    let envs: Vec<_> = cmd.get_envs().collect();
+    assert!(envs.iter().any(|(key, value)| {
+        *key == OsStr::new("SSH_ASKPASS")
+            && value.is_some_and(|value| value == session.script_path.as_os_str())
+    }));
+    assert!(envs.iter().any(|(key, value)| {
+        *key == OsStr::new("SSH_ASKPASS_REQUIRE")
+            && value.is_some_and(|value| value == OsStr::new("force"))
+    }));
+    assert!(envs.iter().any(|(key, value)| {
+        *key == OsStr::new("WARP_SSH_ASKPASS_FILE")
+            && value.is_some_and(|value| value == session.password_path.as_os_str())
+    }));
+    assert!(
+        envs.iter()
+            .any(|(key, value)| *key == OsStr::new("DISPLAY") && value.is_none())
+    );
 }
 
 /// 真实端到端:创建 `AskpassSession` 拿到 askpass 脚本路径,然后用

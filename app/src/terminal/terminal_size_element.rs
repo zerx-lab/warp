@@ -70,37 +70,36 @@ impl Element for TerminalSizeElement {
         ctx: &mut EventContext,
         app: &AppContext,
     ) -> bool {
-        let handled_by_child = self.child.dispatch_event(event, ctx, app);
         let Some(z_index) = self.z_index() else {
-            return false;
+            return self.child.dispatch_event(event, ctx, app);
         };
 
-        if !handled_by_child {
-            if let Some(event_at_z_index) = event.at_z_index(z_index, ctx) {
-                match event_at_z_index {
-                    Event::DragFiles { location } => {
-                        if self.mouse_position_is_in_bounds(*location) {
-                            ctx.dispatch_typed_action(TerminalAction::StartFileDropTarget);
-                        } else {
-                            ctx.dispatch_typed_action(TerminalAction::StopFileDropTarget);
-                        }
-                        return true;
-                    }
-                    Event::DragFileExit => {
+        if let Some(event_at_z_index) = event.at_z_index(z_index, ctx) {
+            match event_at_z_index {
+                Event::DragFiles { location } => {
+                    if self.mouse_position_is_in_bounds(*location) {
+                        ctx.dispatch_typed_action(TerminalAction::StartFileDropTarget);
+                    } else {
                         ctx.dispatch_typed_action(TerminalAction::StopFileDropTarget);
-                        return true;
                     }
-                    Event::DragAndDropFiles { paths, location } => {
-                        if self.mouse_position_is_in_bounds(*location) && !paths.is_empty() {
-                            let paths = paths.iter().map(ToOwned::to_owned).collect();
-                            ctx.dispatch_typed_action(TerminalAction::DragAndDropFiles(paths));
-                        }
-                        return true;
+                    return true;
+                }
+                Event::DragFileExit => {
+                    ctx.dispatch_typed_action(TerminalAction::StopFileDropTarget);
+                    return true;
+                }
+                Event::DragAndDropFiles { paths, location } => {
+                    if self.mouse_position_is_in_bounds(*location) && !paths.is_empty() {
+                        let paths = paths.iter().map(ToOwned::to_owned).collect();
+                        ctx.dispatch_typed_action(TerminalAction::DragAndDropFiles(paths));
                     }
-                    _ => {}
-                };
-            }
+                    return true;
+                }
+                _ => {}
+            };
         }
+
+        let handled_by_child = self.child.dispatch_event(event, ctx, app);
         handled_by_child
     }
 }

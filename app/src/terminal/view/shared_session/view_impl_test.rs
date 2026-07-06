@@ -6,7 +6,7 @@ use warpui::App;
 use crate::context_chips::prompt_type::PromptType;
 
 use crate::assert_lines_approx_eq;
-use crate::terminal::model::blocks::{ToTotalIndex as _, INLINE_BANNER_HEIGHT};
+use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::shared_session::test_utils::terminal_view_for_viewer;
 use crate::test_util::add_window_with_terminal;
@@ -410,8 +410,8 @@ fn test_on_session_share_ended_inserts_tombstone_for_ambient_session_under_ambie
 }
 
 #[test]
-fn test_on_session_share_ended_does_not_insert_tombstone_for_non_ambient_session_under_ambient_agent_setup_v2(
-) {
+fn test_on_session_share_ended_does_not_insert_tombstone_for_non_ambient_session_under_ambient_agent_setup_v2()
+ {
     App::test((), |mut app| async move {
         let terminal = terminal_view_for_viewer(&mut app);
         let initial_block_height_items = terminal.read(&app, |view, _| {

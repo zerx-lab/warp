@@ -1,7 +1,7 @@
 use crate::terminal::view::TerminalView;
 
 use crate::terminal::shared_session::protocol::WindowSize;
-use warpui::{elements::MouseStateHandle, ViewContext};
+use warpui::{ViewContext, elements::MouseStateHandle};
 
 use super::adapter::Participant;
 

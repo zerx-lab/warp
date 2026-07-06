@@ -1,12 +1,13 @@
-use warpui::{prelude::ChildView, Element, EntityId, View, ViewContext, ViewHandle};
+use warpui::{Element, EntityId, View, ViewContext, ViewHandle, prelude::ChildView};
 
 use crate::{
     ai::{
-        agent::{conversation::AIConversationId, AIAgentExchangeId},
-        blocklist::{agent_view::AgentViewEntryOrigin, AIBlock},
+        agent::{AIAgentExchangeId, conversation::AIConversationId},
+        blocklist::{AIBlock, agent_view::AgentViewEntryOrigin},
     },
     env_vars::env_var_collection_block::EnvVarCollectionBlock,
     terminal::{
+        TerminalView,
         block_list_viewport::ScrollPositionUpdate,
         model::{
             blocks::RichContentItem, rich_content::RichContentType, terminal_model::BlockIndex,
@@ -19,7 +20,6 @@ use crate::{
             ssh_remote_server_failed_banner::SshRemoteServerFailedBanner,
         },
         warpify::success_block::WarpifySuccessBlock,
-        TerminalView,
     },
 };
 

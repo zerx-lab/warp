@@ -704,8 +704,8 @@ impl TerminalManager {
                         view_weak_handle_2.upgrade(ctx).is_some_and(|view| {
                             view.update(ctx, |terminal_view, _ctx| terminal_view.is_ssh_uploader())
                         });
-                    let should_poll_for_password_prompt = password_notification_setting_on
-                        || (pane_handling_ssh_upload && FeatureFlag::SshDragAndDrop.is_enabled());
+                    let should_poll_for_password_prompt =
+                        password_notification_setting_on || pane_handling_ssh_upload;
 
                     if should_poll_for_password_prompt {
                         poller.update(ctx, |model, ctx| {
@@ -758,7 +758,7 @@ impl TerminalManager {
                     && termios.local_flags.contains(LocalFlags::ICANON);
 
                 if might_be_password_prompt {
-                    if FeatureFlag::SshDragAndDrop.is_enabled() {
+                    if view.update(ctx, |view, _ctx| view.is_ssh_uploader()) {
                         view.update(ctx, |view, ctx| {
                             view.propagate_password_request(ctx);
                         });

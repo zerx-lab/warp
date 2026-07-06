@@ -3,6 +3,7 @@
 use crate::context_chips::ContextChipKind;
 use crate::editor::{InteractionState, ReplicaId};
 use crate::settings::InputModeSettings;
+use crate::terminal::TerminalModel;
 use crate::terminal::block_list_viewport::ScrollPositionUpdate;
 use crate::terminal::model::blocks::BlockListPoint;
 use crate::terminal::model::index::Point;
@@ -13,14 +14,13 @@ use crate::terminal::shared_session::protocol::{ParticipantId, Role, SessionId, 
 use crate::terminal::shared_session::protocol::{RoleUpdateReason, SessionEndedReason};
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::shared_session::{
-    selections::point_to_session_sharing, SharedSessionActionSource, SharedSessionScrollbackType,
-    SharedSessionStatus,
+    SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionStatus,
+    selections::point_to_session_sharing,
 };
 use crate::terminal::view::{
     ContextMenuAction, Event, InlineBannerItem, InlineBannerType, RichContentInsertionPosition,
     SharedSessionBanners, SizeUpdateBuilder, TerminalAction, TerminalView,
 };
-use crate::terminal::TerminalModel;
 use crate::view_components::ToastFlavor;
 use crate::{
     menu::{MenuItem, MenuItemFields},
@@ -32,8 +32,8 @@ use warpui::r#async::Timer;
 
 use settings::Setting as _;
 use warp_core::semantic_selection::SemanticSelection;
-use warpui::units::IntoLines;
 use warpui::SingletonEntity;
+use warpui::units::IntoLines;
 use warpui::{ModelHandle, ViewContext};
 
 use crate::terminal::shared_session::participant_avatar_view::ParticipantAvatarEvent;
@@ -44,11 +44,11 @@ use crate::terminal::shared_session::protocol::ParticipantPresenceUpdate;
 
 use warpui::AppContext;
 
-use super::adapter::{Adapter, Kind, Participant};
-use super::sharer::inactivity_modal::InactivityModalEvent;
-use super::sharer::Sharer;
-use super::viewer::Viewer;
 use super::ConversationEndedTombstoneView;
+use super::adapter::{Adapter, Kind, Participant};
+use super::sharer::Sharer;
+use super::sharer::inactivity_modal::InactivityModalEvent;
+use super::viewer::Viewer;
 
 impl TerminalView {
     pub fn sharer_session_kind(&self) -> Option<&Kind> {

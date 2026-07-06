@@ -37,7 +37,7 @@ impl TerminalView {
 
         use crate::{
             terminal::{
-                event_listener::ChannelEventListener, model::block::BlockSize, BlockPadding,
+                BlockPadding, event_listener::ChannelEventListener, model::block::BlockSize,
             },
             themes::default_themes::dark_theme,
         };

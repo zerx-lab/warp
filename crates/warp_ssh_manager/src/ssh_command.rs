@@ -357,14 +357,14 @@ async fn run_ssh_test(args: &[String]) -> Result<String, std::io::Error> {
 /// author: logic
 /// date: 2026-06-01
 #[cfg(windows)]
-struct AskpassSession {
+pub struct AskpassSession {
     password_path: std::path::PathBuf,
     script_path: std::path::PathBuf,
 }
 
 #[cfg(windows)]
 impl AskpassSession {
-    fn new(password: &Zeroizing<String>) -> std::io::Result<Self> {
+    pub fn new(password: &Zeroizing<String>) -> std::io::Result<Self> {
         use std::io::Write as _;
 
         let dir = std::env::temp_dir();
@@ -409,7 +409,14 @@ impl AskpassSession {
     }
 
     /// 把 SSH_ASKPASS 所需的环境变量挂到 ssh 子进程上。
-    fn apply_env(&self, cmd: &mut command::r#async::Command) {
+    pub fn apply_env(&self, cmd: &mut command::r#async::Command) {
+        cmd.env("SSH_ASKPASS", &self.script_path)
+            .env("SSH_ASKPASS_REQUIRE", "force")
+            .env("WARP_SSH_ASKPASS_FILE", &self.password_path)
+            .env_remove("DISPLAY");
+    }
+
+    pub fn apply_env_blocking(&self, cmd: &mut command::blocking::Command) {
         cmd.env("SSH_ASKPASS", &self.script_path)
             .env("SSH_ASKPASS_REQUIRE", "force")
             .env("WARP_SSH_ASKPASS_FILE", &self.password_path)

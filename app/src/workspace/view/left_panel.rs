@@ -45,9 +45,7 @@ use crate::workspace::view::conversation_list::view::{
 use crate::workspace::view::global_search::view::{
     Event as GlobalSearchViewEvent, GlobalSearchEntryFocus, GlobalSearchView,
 };
-use crate::workspace::view::server_file_browser::{
-    ServerFileBrowserEvent, ServerFileBrowserView,
-};
+use crate::workspace::view::server_file_browser::{ServerFileBrowserEvent, ServerFileBrowserView};
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
     LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_SKILL_MANAGER_BINDING_NAME,

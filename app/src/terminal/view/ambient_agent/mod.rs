@@ -20,6 +20,6 @@ pub use host_selector::{
 pub use loading_screen::{render_ambient_agent_error_screen, render_ambient_agent_loading_screen};
 pub use model::{AgentProgress, AmbientAgentViewModel, AmbientAgentViewModelEvent, Status};
 pub use model_selector::{ModelSelector, ModelSelectorAction, ModelSelectorEvent};
-pub use progress::{render_progress, ProgressProps, ProgressStep, ProgressStepState};
+pub use progress::{ProgressProps, ProgressStep, ProgressStepState, render_progress};
 pub use progress_ui_state::AmbientAgentProgressUIState;
-pub use tips::{get_ambient_agent_tips, AmbientAgentTip};
+pub use tips::{AmbientAgentTip, get_ambient_agent_tips};

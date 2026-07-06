@@ -73,9 +73,9 @@ mod search_bar;
 mod server;
 mod server_time;
 mod session_management;
+mod sftp_manager;
 mod shell_indicator;
 mod skill_manager;
-mod sftp_manager;
 mod ssh_manager;
 mod suggestions;
 mod system;
@@ -2275,6 +2275,8 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
     flags.insert(FeatureFlag::SshRemoteServer);
     #[cfg(all(debug_assertions, not(windows)))]
     flags.insert(FeatureFlag::ServerFileBrowser);
+    #[cfg(debug_assertions)]
+    flags.insert(FeatureFlag::Lrzsz);
 
     // Issue #72: HTTP 代理设置页面。不走 channel 判断,所有 channel 含 zap-oss
     // 默认启用,作为企业 VPN / 公司代理场景的基本能力。
@@ -2331,6 +2333,8 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SSHTmuxWrapper,
         #[cfg(feature = "onekey_prompt")]
         FeatureFlag::OneKeyPrompt,
+        #[cfg(feature = "lrzsz")]
+        FeatureFlag::Lrzsz,
         #[cfg(feature = "less_horizontal_terminal_padding")]
         FeatureFlag::LessHorizontalTerminalPadding,
         #[cfg(feature = "shell_selector")]

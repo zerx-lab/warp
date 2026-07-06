@@ -1,4 +1,4 @@
-use crate::terminal::SizeInfo;
+use crate::terminal::{zmodem::ZmodemTransferPaths, SizeInfo};
 use std::borrow::Cow;
 
 /// Messages that may be sent to the `EventLoop`.
@@ -19,4 +19,10 @@ pub enum Message {
 
     /// Instruction to resize the PTY.
     Resize(SizeInfo),
+
+    /// UI collected local paths and should start a pending ZMODEM transfer.
+    ZmodemTransferPaths(ZmodemTransferPaths),
+
+    /// Abort any in-band ZMODEM session without emitting a UI cancellation event.
+    AbortZmodemSilently,
 }

@@ -433,9 +433,12 @@ pub mod next_command {
             .into_iter()
             .map(|(name, content)| UserRuleCtx { name, content })
             .collect();
-        let system = render("next_command_system.j2", context! {
-            user_rules => user_rule_ctxs,
-        });
+        let system = render(
+            "next_command_system.j2",
+            context! {
+                user_rules => user_rule_ctxs,
+            },
+        );
         let user = render(
             "next_command_user.j2",
             context! {

@@ -1,7 +1,13 @@
 use crate::terminal::{
-    bootstrap::init_shell_script_for_shell, event_listener::ChannelEventListener,
-    model::ansi::Processor, session_settings::SessionSettings, shell::ShellType,
-    writeable_pty::Message as EventLoopMessage, SizeInfo, TerminalModel,
+    bootstrap::init_shell_script_for_shell,
+    event::Event as TerminalEvent,
+    event_listener::ChannelEventListener,
+    model::ansi::Processor,
+    session_settings::SessionSettings,
+    shell::ShellType,
+    writeable_pty::Message as EventLoopMessage,
+    zmodem::{ZmodemEvent, ZMODEM_ABORT_SEQUENCE},
+    SizeInfo, TerminalModel,
 };
 use async_channel::Receiver;
 use futures_util::SinkExt;
@@ -106,6 +112,7 @@ impl EventLoop {
         let is_honor_ps1_enabled = *SessionSettings::as_ref(ctx).honor_ps1;
 
         let receiver = self.event_loop_rx.clone();
+        let channel_event_listener = self.channel_event_listener.clone();
         ctx.background_executor()
             .spawn(async move {
                 if let Err(e) = Self::write_env_vars(&mut sink, is_honor_ps1_enabled).await {
@@ -141,6 +148,43 @@ impl EventLoop {
                             if let Err(e) = sink.send(Message::new_text(serialized)).await {
                                 log::error!("Failed to send message to network-backed PTY {e:?}");
                             };
+                        }
+                        EventLoopMessage::ZmodemTransferPaths(paths) => {
+                            if paths.paths.is_empty() {
+                                if let Err(e) = sink
+                                    .send(Message::new_binary(ZMODEM_ABORT_SEQUENCE.to_vec()))
+                                    .await
+                                {
+                                    log::error!(
+                                        "Failed to cancel network-backed ZMODEM transfer {e:?}"
+                                    );
+                                }
+                                channel_event_listener.send_terminal_event(TerminalEvent::Zmodem(
+                                    ZmodemEvent::Cancelled {
+                                        direction: paths.direction,
+                                    },
+                                ));
+                                continue;
+                            }
+
+                            channel_event_listener.send_terminal_event(TerminalEvent::Zmodem(
+                                ZmodemEvent::Failed {
+                                    direction: Some(paths.direction),
+                                    message:
+                                        "network-backed PTY does not support ZMODEM transfers yet"
+                                            .to_string(),
+                                },
+                            ));
+                        }
+                        EventLoopMessage::AbortZmodemSilently => {
+                            if let Err(e) = sink
+                                .send(Message::new_binary(ZMODEM_ABORT_SEQUENCE.to_vec()))
+                                .await
+                            {
+                                log::error!(
+                                    "Failed to silently abort network-backed ZMODEM transfer {e:?}"
+                                );
+                            }
                         }
                         // TODO(alokedesai): Implement shutdown on the network backed PTY.
                         EventLoopMessage::Shutdown | EventLoopMessage::ChildExited => {}

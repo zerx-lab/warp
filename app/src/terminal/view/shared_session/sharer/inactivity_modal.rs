@@ -3,12 +3,12 @@ use std::time::Duration;
 use crate::modal::Modal;
 use crate::ui_components::blended_colors;
 use warp_core::ui::appearance::Appearance;
+use warpui::r#async::Timer;
 use warpui::elements::{
     ChildView, Container, CrossAxisAlignment, Flex, MouseStateHandle, ParentElement, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
-use warpui::r#async::Timer;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
@@ -152,13 +152,17 @@ impl InactivityModalBody {
         );
 
         Container::new(
-            Text::new_inline(text, appearance.ui_font_family(), appearance.ui_font_subheading())
-                .with_color(blended_colors::text_main(
-                    appearance.theme(),
-                    appearance.theme().background(),
-                ))
-                .with_style(Properties::default().weight(Weight::Normal))
-                .finish(),
+            Text::new_inline(
+                text,
+                appearance.ui_font_family(),
+                appearance.ui_font_subheading(),
+            )
+            .with_color(blended_colors::text_main(
+                appearance.theme(),
+                appearance.theme().background(),
+            ))
+            .with_style(Properties::default().weight(Weight::Normal))
+            .finish(),
         )
         .with_padding_bottom(MODAL_PADDING)
         .finish()

@@ -46,11 +46,7 @@ pub(crate) fn render_cli_agent_logo(
         _ => None,
     };
     if let Some(path) = multi_color_logo_path {
-        Image::new(
-            AssetSource::Bundled { path },
-            CacheOption::BySize,
-        )
-        .finish()
+        Image::new(AssetSource::Bundled { path }, CacheOption::BySize).finish()
     } else {
         agent
             .icon()

@@ -13,6 +13,8 @@ pub mod types;
 pub use db::{set_database_path, with_conn};
 pub use repository::{SshRepository, SshRepositoryError, SyncMetaRepository};
 pub use secrets::{KeychainSecretStore, SecretKind, SshSecretStore, SshSecretStoreError};
+#[cfg(windows)]
+pub use ssh_command::AskpassSession;
 pub use ssh_command::{
     ConnectionTestResult, build_ssh_args, build_ssh_command_line, test_connection,
 };

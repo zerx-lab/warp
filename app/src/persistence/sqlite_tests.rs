@@ -418,9 +418,7 @@ fn test_migrate_zap_app_group_sqlite_copies_newer_legacy_files() {
         fs::read_to_string(target_db.with_extension("sqlite-shm")).unwrap(),
         "legacy-shm"
     );
-    assert!(state_dir
-        .join(".zap-app-group-sqlite-migrated")
-        .exists());
+    assert!(state_dir.join(".zap-app-group-sqlite-migrated").exists());
 }
 
 #[cfg(target_os = "macos")]

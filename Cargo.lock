@@ -14917,6 +14917,7 @@ dependencies = [
  "zap_sync",
  "zbus 5.16.0",
  "zeroize",
+ "zmodem2",
 ]
 
 [[package]]
@@ -17402,6 +17403,17 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[package]]
+name = "zmodem2"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "150fc94907268863d0b20d505210665e600b016f16a5abc2f4fd233cc4ac6681"
+dependencies = [
+ "bitflags 2.13.0",
+ "hex",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "zopfli"

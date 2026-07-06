@@ -3,14 +3,14 @@ use std::{borrow::Cow, cell::RefCell};
 use warp_core::ui::{
     appearance::Appearance,
     builder::UiBuilder,
-    theme::{color::internal_colors, WarpTheme},
+    theme::{WarpTheme, color::internal_colors},
 };
 use warpui::{
+    Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
     clipboard::ClipboardContent,
     elements::*,
     text_layout::ClipConfig,
     ui_components::{button::ButtonVariant, components::UiComponent as _},
-    Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 
 use crate::{terminal::model::terminal_model::ExitReason, ui_components};
@@ -225,9 +225,7 @@ impl TerminationType {
                         .with_text_label(crate::t!("terminal-more-info"))
                         .build()
                         .on_click(|ctx, _, _| {
-                            ctx.dispatch_typed_action(Action::OpenUrl(
-                                "".to_string(),
-                            ));
+                            ctx.dispatch_typed_action(Action::OpenUrl("".to_string()));
                         })
                         .finish(),
                 ]
@@ -263,9 +261,7 @@ impl TerminationType {
                         .with_text_label(crate::t!("terminal-more-info"))
                         .build()
                         .on_click(|ctx, _, _| {
-                            ctx.dispatch_typed_action(Action::OpenUrl(
-                                "".to_string(),
-                            ));
+                            ctx.dispatch_typed_action(Action::OpenUrl("".to_string()));
                         })
                         .finish(),
                 ]

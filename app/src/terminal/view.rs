@@ -44,10 +44,10 @@ use std::ops::Deref as _;
 
 use crate::ai::blocklist::agent_view::fork_from_last_known_good_state_exchange_id;
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_fill, AgentViewController, AgentViewControllerEvent, AgentViewDisplayMode,
-    AgentViewEntryBlockParams, AgentViewEntryOrigin, AgentViewHeaderDisabledTheme,
-    AgentViewHeaderTheme, AgentViewZeroStateBlock, AgentViewZeroStateEvent, EphemeralMessageModel,
-    ExitAgentViewError, ExitConfirmationTrigger, InlineAgentViewHeader,
+    AgentViewController, AgentViewControllerEvent, AgentViewDisplayMode, AgentViewEntryBlockParams,
+    AgentViewEntryOrigin, AgentViewHeaderDisabledTheme, AgentViewHeaderTheme,
+    AgentViewZeroStateBlock, AgentViewZeroStateEvent, EphemeralMessageModel, ExitAgentViewError,
+    ExitConfirmationTrigger, InlineAgentViewHeader, agent_view_bg_fill,
 };
 use crate::ai::conversation_utils;
 use crate::ai::predict::prompt_suggestions::{
@@ -56,7 +56,7 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
 use crate::search::slash_command_menu::static_commands::commands;
-use crate::ssh_manager::onekey::{load_saved_ssh_credentials, OneKeyCredentialKind};
+use crate::ssh_manager::onekey::{OneKeyCredentialKind, load_saved_ssh_credentials};
 use crate::ssh_manager::password_prompt::bytes_look_like_password_prompt;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
@@ -69,11 +69,11 @@ use crate::view_components::action_button::{ActionButton, ButtonSize, KeystrokeS
 
 use use_agent_footer::UseAgentToolbar;
 
-use super::cli_agent;
 use super::CLIAgent;
+use super::cli_agent;
 #[cfg(feature = "local_fs")]
 use crate::ai::agent::{CurrentHead, DiffBase};
-use crate::ai::ambient_agents::{conversation_output_status_from_conversation, AmbientAgentTaskId};
+use crate::ai::ambient_agents::{AmbientAgentTaskId, conversation_output_status_from_conversation};
 use crate::ai::blocklist::block::cli::{
     CLISubagentView, CLISubagentViewEvent, CLISubagentViewMode,
 };
@@ -84,19 +84,19 @@ use crate::ai::blocklist::block::status_bar::BlocklistAIStatusBarEvent;
 use crate::ai::blocklist::usage::conversation_usage_view::{
     ConversationUsageInfo, ConversationUsageView, DisplayMode, TimingInfo,
 };
-use crate::ai::blocklist::{block_context_from_terminal_model, SlashCommandRequest};
+use crate::ai::blocklist::{SlashCommandRequest, block_context_from_terminal_model};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::loading::shimmering_warp_loading_text;
+#[cfg(feature = "local_fs")]
+use crate::code_review::DiffSetScope;
 #[cfg(feature = "local_fs")]
 use crate::code_review::context::{
     convert_file_diffs_to_diffset_hunks, create_attachment_reference_and_key,
     register_diffset_attachment,
 };
-#[cfg(feature = "local_fs")]
-use crate::code_review::DiffSetScope;
 use crate::terminal::model::blocks::RemovableBlocklistItem;
 #[cfg(feature = "local_fs")]
-use crate::util::file::external_editor::{settings::EditorLayout, EditorSettings};
+use crate::util::file::external_editor::{EditorSettings, settings::EditorLayout};
 use crate::util::truncation::truncate_from_end;
 
 use crate::ai::agent::redaction::redact_secrets;
@@ -108,7 +108,7 @@ use crate::ai::agent::{
 use crate::ai::blocklist::block::{AIBlockAction, FinishReason};
 use crate::ai::blocklist::model::AIBlockOutputStatus;
 use crate::code_review::comments::{
-    convert_insert_review_comments, AttachedReviewComment, PendingImportedReviewComment,
+    AttachedReviewComment, PendingImportedReviewComment, convert_insert_review_comments,
 };
 #[cfg(feature = "local_fs")]
 use crate::code_review::diff_state::DiffStateModel;
@@ -125,12 +125,12 @@ use crate::remote_server::manager::{
 use crate::settings::ai::FocusedTerminalInfo;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
 use crate::terminal::cli_agent_sessions::event::{
-    parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType,
-    CLI_AGENT_NOTIFICATION_SENTINEL,
+    CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType,
+    parse_event,
 };
-use crate::terminal::cli_agent_sessions::listener::{is_agent_supported, CLIAgentSessionListener};
+use crate::terminal::cli_agent_sessions::listener::{CLIAgentSessionListener, is_agent_supported};
 #[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
+use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
@@ -143,6 +143,7 @@ use crate::terminal::view::ssh_remote_server_failed_banner::{
     SshRemoteServerFailedBanner, SshRemoteServerFailedBannerEvent, SshRemoteServerFailureKind,
 };
 use crate::terminal::view::telemetry::PromptSuggestionFallbackReason;
+use crate::terminal::zmodem::{ZmodemDirection, ZmodemEvent, ZmodemTransferPaths};
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 
 pub use self::link_detection::GridHighlightedLink;
@@ -154,13 +155,13 @@ pub use action::{AgentOnboardingVersion, OnboardingIntention, OnboardingVersion,
 use ai::api_keys::{ApiKeyManager, AwsCredentialsState};
 
 use crate::terminal::shared_session::protocol::{SessionEndedReason, SessionSourceType};
-pub use block_banner::{WithinBlockBanner, BLOCK_BANNER_HEIGHT};
+pub use block_banner::{BLOCK_BANNER_HEIGHT, WithinBlockBanner};
 use block_onboarding::onboarding_agentic_suggestions_block::{
     OnboardingAgenticSuggestionsBlock, OnboardingAgenticSuggestionsBlockEvent, OnboardingChipType,
 };
 pub use init::{
-    init, CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
-    TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
+    CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
+    TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING, init,
 };
 pub use inline_banner::{NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction};
 #[cfg(feature = "local_fs")]
@@ -168,12 +169,14 @@ use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
-use warpui::elements::{shimmering_text::ShimmeringTextStateHandle, ChildView};
+use warpui::elements::{ChildView, shimmering_text::ShimmeringTextStateHandle};
 use warpui::fonts::Properties;
 use warpui::{ViewHandle, WeakModelHandle};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 
+use crate::AIRequestUsageModel;
+use crate::ActiveSession as WindowActiveSession;
 use crate::ai::agent::task::TaskId;
 #[cfg(any(test, feature = "integration_tests"))]
 use crate::ai::agent::UserQueryMode;
@@ -184,27 +187,26 @@ use crate::ai::agent::{
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
-use crate::ai::blocklist::{model::AIBlockModelImpl, ClientIdentifiers};
+use crate::ai::blocklist::{ClientIdentifiers, model::AIBlockModelImpl};
 use crate::ai::{
     agent::{
         AIAgentActionId, AIAgentCitation, AIAgentContext, AIAgentExchangeId, AIAgentInput,
         FileLocations, PassiveCodeDiffEntry, PassiveSuggestionResultType,
     },
     blocklist::{
-        ai_brand_color, get_ai_block_overflow_menu_element_position_id,
+        AIBlock, AIBlockEvent, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, BlocklistAIActionEvent,
+        BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
+        BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+        BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig,
+        InputType, LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel,
+        MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PRE_REWIND_PREFIX,
+        PassiveSuggestionsModels, PendingQueryState, PromptSuggestionExecutor,
+        PromptSuggestionExecutorEvent, RequestFileEditsFormatKind, ShellCommandExecutor,
+        ShellCommandExecutorEvent, ai_brand_color, get_ai_block_overflow_menu_element_position_id,
         get_attached_blocks_chip_element_position_id,
         inline_action::code_diff_view::{CodeDiffView, FileDiff},
         summarization_cancel_dialog::SummarizationCancelDialog,
         telemetry_banner::should_collect_ai_ugc_telemetry,
-        AIBlock, AIBlockEvent, BlocklistAIActionEvent, BlocklistAIActionModel,
-        BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-        BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-        BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-        LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
-        MaaPassiveSuggestionsModel, PassiveSuggestionsModels, PendingQueryState,
-        PromptSuggestionExecutor, PromptSuggestionExecutorEvent, RequestFileEditsFormatKind,
-        ShellCommandExecutor, ShellCommandExecutorEvent, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
-        PRE_REWIND_PREFIX,
     },
     execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId},
 };
@@ -212,21 +214,21 @@ use crate::auth::AuthManager;
 use crate::auth::AuthState;
 use crate::auth::AuthStateProvider;
 use crate::auth::AuthViewVariant;
-use crate::autoupdate::{self, get_update_state, AutoupdateStage};
+use crate::autoupdate::{self, AutoupdateStage, get_update_state};
 use crate::cloud_object::model::actions::ObjectActionType;
 use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::cloud_object::update_manager::UpdateManager;
 use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType, StoredObject};
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
+use crate::context_chips::ContextChipKind;
 use crate::context_chips::prompt::Prompt;
 use crate::context_chips::prompt_type::PromptType;
-use crate::context_chips::ContextChipKind;
-use crate::drive::settings::WarpDriveSettings;
 use crate::drive::ObjectTypeAndId;
+use crate::drive::settings::WarpDriveSettings;
 use crate::env_vars::{
-    env_var_collection_block::{EnvVarCollectionBlock, EnvVarCollectionBlockEvent},
     EnvVar, EnvVarCollectionObject,
+    env_var_collection_block::{EnvVarCollectionBlock, EnvVarCollectionBlockEvent},
 };
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::persistence::{self, FinishedCommandMetadata};
@@ -241,15 +243,16 @@ use crate::settings::{
     InputModeSettings, InputModeSettingsChangedEvent, InputSettings, PaneSettings,
     PaneSettingsChangedEvent, PrivacySettings, SelectionSettings, VimBannerSettings,
 };
+use crate::settings_view::SettingsSection;
 use crate::settings_view::flags;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
-use crate::settings_view::SettingsSection;
 use crate::shell_indicator::ShellIndicatorType;
-use crate::terminal::alias::{check_for_alias_async, AliasedCommand};
+use crate::terminal::ShellLaunchData;
+use crate::terminal::alias::{AliasedCommand, check_for_alias_async};
 use crate::terminal::alt_screen_reporting::{AltScreenReporting, AltScreenReportingChangedEvent};
 use crate::terminal::block_filter::{
-    filter_button_position_id, BlockFilterEditor, BlockFilterEditorEvent, BlockFilterQuery,
-    OpenedFromClick,
+    BlockFilterEditor, BlockFilterEditorEvent, BlockFilterQuery, OpenedFromClick,
+    filter_button_position_id,
 };
 use crate::terminal::block_list_viewport::OverhangingBlock;
 use crate::terminal::block_list_viewport::ScrollPositionUpdate;
@@ -260,7 +263,7 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::{CommandExecutionSource, InputAction, InputEmptyStateChangeReason};
-use crate::terminal::ligature_settings::{should_use_ligature_rendering, LigatureSettings};
+use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::get_shell_starter;
 #[cfg(feature = "local_tty")]
@@ -275,10 +278,10 @@ use crate::terminal::recorder::PtyRecorder;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::session_settings::ToolbarChipSelection;
 use crate::terminal::session_settings::{
-    NotificationsMode, NotificationsSettings, SessionSettings,
+    DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION, SessionSettingsChangedEvent,
 };
 use crate::terminal::session_settings::{
-    SessionSettingsChangedEvent, DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION,
+    NotificationsMode, NotificationsSettings, SessionSettings,
 };
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
 use crate::terminal::shared_session::{
@@ -287,33 +290,31 @@ use crate::terminal::shared_session::{
 use crate::terminal::ssh::ssh_detection::SshInteractiveSessionDetected;
 use crate::terminal::view::block_onboarding::onboarding_prompt_block::OnboardingPromptBlock;
 use crate::terminal::warpify::{
-    render::render_subshell_separator, settings::WarpifySettings, SubshellSource,
+    SubshellSource, render::render_subshell_separator, settings::WarpifySettings,
 };
-use crate::terminal::ShellLaunchData;
-use crate::terminal::{element_size_at_last_frame, HistoryEntry};
-use crate::terminal::{height_in_range_approx, heights_approx_gt, SizeUpdate};
-use crate::terminal::{heights_approx_eq, CellSizeAndWindowPadding};
 use crate::terminal::{AudibleBell, SizeUpdateReason};
 use crate::terminal::{BlockListSettings, BlockListSettingsChangedEvent};
+use crate::terminal::{CellSizeAndWindowPadding, heights_approx_eq};
+use crate::terminal::{HistoryEntry, element_size_at_last_frame};
+use crate::terminal::{SizeUpdate, height_in_range_approx, heights_approx_gt};
 use crate::themes::theme::WarpTheme;
 use crate::ui_components::icons::{self};
+use crate::ui_components::spinner::{BrailleSpinner, SpinnerStateHandle};
 use crate::util::bindings::{
-    custom_tag_to_keystroke, keybinding_name_to_display_string, keybinding_name_to_keystroke,
-    set_custom_keybinding, CustomAction,
+    CustomAction, custom_tag_to_keystroke, keybinding_name_to_display_string,
+    keybinding_name_to_keystroke, set_custom_keybinding,
 };
 use crate::util::clipboard::clipboard_content_with_escaped_paths;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{is_markdown_file, resolve_file_target, FileTarget};
+use crate::util::openable_file_type::{FileTarget, is_markdown_file, resolve_file_target};
 use crate::view_components::{DismissibleToast, ToastFlavor};
-use crate::workflows::workflow::Workflow;
 use crate::workflows::WorkflowSelectionSource;
+use crate::workflows::workflow::Workflow;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{CommandSearchOptions, OneTimeModalModel, ToastStack, WorkspaceAction};
 use crate::workspace::{ForkAIConversationParams, ForkFromExchange, ForkedConversationDestination};
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::AIRequestUsageModel;
-use crate::ActiveSession as WindowActiveSession;
-use crate::{report_if_error, AIAgentActionResultType};
+use crate::{AIAgentActionResultType, report_if_error};
 use crate::{safe_error, safe_warn};
 
 use crate::terminal::shared_session::protocol::{
@@ -323,7 +324,7 @@ use async_channel::{Receiver, Sender};
 use async_stream::stream;
 use chrono::{DateTime, Local, NaiveDateTime};
 use command_corrections::rules::{Rule, RuleId as CommandCorrectionsRuleId};
-use command_corrections::{correct_command, Command, Correction, HistoryItem, SessionMetadata};
+use command_corrections::{Command, Correction, HistoryItem, SessionMetadata, correct_command};
 use enclose::enclose;
 use instant::Instant;
 use itertools::Itertools;
@@ -346,8 +347,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use sum_tree::SeekBias;
@@ -357,29 +358,33 @@ use warp_core::user_preferences::GetUserPreferences as _;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 use warp_util::path::ShellFamily;
+#[cfg(all(windows, feature = "local_tty"))]
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{
     AxisConfiguration, ClippedAxisConfiguration, DualAxisConfig, NewScrollableElement,
     ScrollableAppearance, SingleAxisConfig,
 };
 use warpui::elements::{
-    get_rich_content_position_id, Border, ChildAnchor, ClippedScrollStateHandle, Container,
-    CrossAxisAlignment, DispatchEventResult, DropTarget, DropTargetData, Empty, EventHandler, Flex,
-    NewScrollable, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, ScrollableElement,
-    ScrollbarWidth, Shrinkable, Text,
+    Border, ChildAnchor, ClippedScrollStateHandle, Container, CrossAxisAlignment,
+    DispatchEventResult, DropTarget, DropTargetData, Empty, EventHandler, Flex, NewScrollable,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, ScrollableElement, ScrollbarWidth, Shrinkable, Text,
+    get_rich_content_position_id,
 };
 use warpui::event::ModifiersState;
 use warpui::keymap::Keystroke;
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
-use warpui::platform::{Cursor, OperatingSystem};
-use warpui::r#async::Timer;
+use warpui::platform::{Cursor, FilePickerConfiguration, OperatingSystem};
 use warpui::windowing::WindowManager;
 
 use warpui::assets::asset_cache::{AssetCache, AssetCacheEvent};
 use warpui::image_cache::ImageType;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
 use warpui::{
+    AccessibilityData, AppContext, BlurContext, Element, Entity, FocusContext, ModelHandle,
+    TypedActionView, UpdateView, View, ViewAsRef, ViewContext, WeakViewHandle,
     accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
     elements::SavePosition,
     elements::{
@@ -388,19 +393,18 @@ use warpui::{
     },
     fonts::{Cache as FontCache, FamilyId},
     ui_components::components::UiComponent,
-    AccessibilityData, AppContext, BlurContext, Element, Entity, FocusContext, ModelHandle,
-    TypedActionView, UpdateView, View, ViewAsRef, ViewContext, WeakViewHandle,
 };
 use warpui::{
+    WindowId,
     elements::Stack,
     end_trace_after_next,
-    geometry::vector::{vec2f, Vector2F},
-    record_trace_event, WindowId,
+    geometry::vector::{Vector2F, vec2f},
+    record_trace_event,
 };
 
-use warpui::{windowing, CursorInfo, EntityId, EventContext, ModelAsRef, SingletonEntity, Tracked};
+use warpui::{CursorInfo, EntityId, EventContext, ModelAsRef, SingletonEntity, Tracked, windowing};
 
-use crate::ai_assistant::{AskAIType, ASK_AI_ASSISTANT_TEXT};
+use crate::ai_assistant::{ASK_AI_ASSISTANT_TEXT, AskAIType};
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::banner::{
     Banner, BannerAction, BannerEvent, BannerState, BannerTextButton, BannerTextContent,
@@ -419,7 +423,7 @@ use crate::pane_group::{
     TerminalViewResources,
 };
 use crate::resource_center::{
-    mark_feature_used_and_write_to_user_defaults, Tip, TipHint, TipsCompleted,
+    Tip, TipHint, TipsCompleted, mark_feature_used_and_write_to_user_defaults,
 };
 use crate::server::telemetry::{
     self, AgentModeAttachContextMethod, AgentModeEntrypoint, AgentModeRewindEntrypoint,
@@ -432,10 +436,11 @@ use crate::server::telemetry::{
     SaveAsWorkflowModalSource, TelemetryEvent,
 };
 use crate::session_management::{CommandContext, SessionNavigationPromptElements};
+use crate::terminal::ShellHost;
 use crate::terminal::alt_screen::alt_screen_element::AltScreenElement;
 use crate::terminal::block_list_element::{
-    render_hoverable_block_button, BlockListElement, BlockListMouseStates, BlockSelectAction,
-    BlockTextSelectAction, SnackbarHeaderState, ToolbeltButtonTooltip,
+    BlockListElement, BlockListMouseStates, BlockSelectAction, BlockTextSelectAction,
+    SnackbarHeaderState, ToolbeltButtonTooltip, render_hoverable_block_button,
 };
 use crate::terminal::block_list_viewport::AutoscrollBehavior;
 use crate::terminal::block_list_viewport::{InputMode, ScrollPosition, ViewportState};
@@ -449,7 +454,7 @@ use crate::terminal::model::block::{AgentInteractionMetadata, BlockMetadata};
 use crate::terminal::model::block::{Block, BlockId};
 use crate::terminal::model::blocks::{BlockFilter, BlockList};
 use crate::terminal::model::blocks::{BlockHeight, BlockHeightItem, BlockHeightSummary, Gap};
-use crate::terminal::model::escape_sequences::{self, EscCodes, ToEscapeSequence, C1};
+use crate::terminal::model::escape_sequences::{self, C1, EscCodes, ToEscapeSequence};
 use crate::terminal::model::grid::grid_handler::{FragmentBoundary, TermMode};
 use crate::terminal::model::index::{Point, Side};
 use crate::terminal::model::mouse::MouseState;
@@ -464,22 +469,20 @@ use crate::terminal::model::{
     blocks::BlockListPoint,
 };
 use crate::terminal::view::inline_banner::{
-    render_agent_mode_setup_banner, AgentModeSetupSpeedbumpBannerAction,
-    AgentModeSetupSpeedbumpBannerState, AliasExpansionBannerState,
-    NotificationsDiscoveryBannerState, NotificationsErrorBannerState, PromptSuggestionBannerState,
-    VimModeBannerState,
+    AgentModeSetupSpeedbumpBannerAction, AgentModeSetupSpeedbumpBannerState,
+    AliasExpansionBannerState, NotificationsDiscoveryBannerState, NotificationsErrorBannerState,
+    PromptSuggestionBannerState, VimModeBannerState, render_agent_mode_setup_banner,
 };
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::terminal::waterfall_gap_element::WaterfallGapElement;
-use crate::terminal::ShellHost;
 use crate::terminal::{
+    TerminalModel,
     block_list_element::BlockHoverAction,
     // find::{Event as FindEvent, Find, FindDirection},
-    input::{Event as InputEvent, Input, INPUT_A11Y_HELPER_KEY, INPUT_A11Y_LABEL_KEY},
+    input::{Event as InputEvent, INPUT_A11Y_HELPER_KEY, INPUT_A11Y_LABEL_KEY, Input},
     model::block::SerializedBlock,
     shell::ShellType,
     terminal_size_element::TerminalSizeElement,
-    TerminalModel,
 };
 use crate::view_components::find::{Event as FindEvent, Find, FindDirection, FindWithinBlockState};
 use fuzzy_match::match_indices_case_insensitive;
@@ -490,8 +493,8 @@ use warpui::text::SelectionType;
 
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 use crate::server::telemetry::{BlockLatencyInfo, BootstrappingInfo};
+use crate::terminal::{History, SizeInfo, color};
 use crate::terminal::{block_list_element::BlockListMenuSource, prompt};
-use crate::terminal::{color, History, SizeInfo};
 use crate::terminal::{color::List, model::block::LONG_RUNNING_BOTTOM_PADDING_LINES};
 use crate::terminal::{event::AfterBlockCompletedEvent, event::BlockLatencyData, event::BlockType};
 use crate::throttle::throttle;
@@ -514,44 +517,43 @@ use super::model::secrets::RichContentSecretTooltipInfo;
 use super::model::selection::ExpandedSelectionRange;
 use super::model::session::SessionBootstrappedEvent;
 use super::settings::AltScreenPaddingMode;
-use super::ssh::error::{SshErrorBlock, SshErrorBlockEvent, SSH_ERROR_BLOCK_VISIBLE_KEY};
+use super::ssh::SSH_WARPIFY_TIMEOUT_DURATION;
+use super::ssh::error::{SSH_ERROR_BLOCK_VISIBLE_KEY, SshErrorBlock, SshErrorBlockEvent};
 use super::ssh::install_tmux::{
-    install_root_tmux_script, install_tmux_script, SshInstallTmuxBlock, SshInstallTmuxBlockEvent,
-    SshKeyEvent, TmuxInstallMethod,
+    SshInstallTmuxBlock, SshInstallTmuxBlockEvent, SshKeyEvent, TmuxInstallMethod,
+    install_root_tmux_script, install_tmux_script,
 };
 use super::ssh::root_access::RootAccess;
 use super::ssh::ssh_detection::evaluate_warpify_ssh_host;
 use super::ssh::util::{
-    convert_script_to_one_line, parse_interactive_ssh_command, InteractiveSshCommand,
-    SshWarpifyCommand,
+    InteractiveSshCommand, SshWarpifyCommand, convert_script_to_one_line,
+    parse_interactive_ssh_command,
 };
 use super::ssh::warpify::{
-    begin_warpify_ssh_session_command, warpify_ssh_session_command, SshWarpifyBlock,
-    SshWarpifyBlockEvent,
+    SshWarpifyBlock, SshWarpifyBlockEvent, begin_warpify_ssh_session_command,
+    warpify_ssh_session_command,
 };
-use super::ssh::SSH_WARPIFY_TIMEOUT_DURATION;
+use super::warpify::WarpificationSource;
 use super::warpify::success_block::{WarpifySuccessBlock, WarpifySuccessBlockEvent};
 use super::warpify::trigger_state::{SshBlockState, WarpifyState};
-use super::warpify::WarpificationSource;
 use super::{GridType, HistoryEvent};
 use crate::antivirus::AntivirusInfo;
 use crate::terminal::links::should_directly_open_link;
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
 use action::RememberForWarpification;
-use block_banner::{render_warpification_banner, WarpificationMode, WarpifyBannerState};
+use block_banner::{WarpificationMode, WarpifyBannerState, render_warpification_banner};
 use bookmarks::render_floating_block_snapshot;
 use command_corrections::rules::generic::history::History as CommandCorrectionsHistoryRule;
 use init::{INPUT_BOX_VISIBLE_KEY, TOGGLE_BLOCK_FILTER_KEYBINDING};
 use inline_banner::{
-    render_alias_expansion_banner, render_aws_bedrock_login_banner,
+    AliasExpansionBanner, AliasExpansionBannerAction, AwsBedrockLoginBannerAction,
+    AwsBedrockLoginBannerState, AwsCliNotInstalledBannerAction, AwsCliNotInstalledBannerState,
+    ByoLlmAuthBannerSessionState, OpenInWarpBannerState, SSHBannerAction, SSHBannerState,
+    VimModeBannerAction, render_alias_expansion_banner, render_aws_bedrock_login_banner,
     render_aws_cli_not_installed_banner, render_inline_notifications_discovery_banner,
     render_inline_notifications_error_banner, render_inline_shared_session_ended_banner,
     render_inline_shared_session_started_banner, render_inline_ssh_wrapper_banner,
     render_open_in_warp_banner, render_shell_process_terminated_banner, render_vim_mode_banner,
-    AliasExpansionBanner, AliasExpansionBannerAction, AwsBedrockLoginBannerAction,
-    AwsBedrockLoginBannerState, AwsCliNotInstalledBannerAction, AwsCliNotInstalledBannerState,
-    ByoLlmAuthBannerSessionState, OpenInWarpBannerState, SSHBannerAction, SSHBannerState,
-    VimModeBannerAction,
 };
 use warp_core::command::ExitCode;
 
@@ -644,16 +646,15 @@ const BOOTSTRAP_FAILED_DURATION: Duration = Duration::from_secs(7);
 /// a user needing to type in one or many secret manager passwords
 /// during the bootstrap period.
 const ENV_VAR_BOOTSTRAP_FAILED_DURATION: Duration = Duration::from_secs(60);
-const KNOWN_ISSUES_URL: &str =
-    "";
+const ZMODEM_TRANSFER_STATUS_HIDE_DELAY: Duration = Duration::from_secs(3);
+const ZMODEM_PROGRESS_RENDER_INTERVAL: Duration = Duration::from_millis(200);
+const KNOWN_ISSUES_URL: &str = "";
 
 /// Link to supported custom prompts.
-const PROMPT_COMPATIBILITY_URL: &str =
-    "";
+const PROMPT_COMPATIBILITY_URL: &str = "";
 
 /// Link to troubleshooting steps for ControlMaster errors.
-const CONTROLMASTER_ISSUES_URL: &str =
-    "";
+const CONTROLMASTER_ISSUES_URL: &str = "";
 
 /// Link to instructions on how to update p10k.
 const P10K_UPDATE_INSTRUCTIONS_URL: &str =
@@ -664,12 +665,8 @@ const ONEKEY_CONTEXT_MENU_WIDTH: f32 = 380.;
 const ONEKEY_PROMPT_THROTTLE: Duration = Duration::from_secs(2);
 const ONEKEY_PROMPT_SLIDING_WINDOW_BYTES: usize = 8 * 1024;
 const ONEKEY_PROMPT_BUFFER_HARD_LIMIT: usize = 16 * 1024;
-/// 每条 OneKey 候选行的估算高度(stacked label + padding),用于按候选数量
-/// 推导 Scrollable 菜单的目标高度。仅作启发,不需要像素精确。
 const ONEKEY_MENU_ROW_HEIGHT: f32 = 44.;
-/// OneKey 菜单顶部搜索 header 的估算高度(icon + EditorView + padding + border)。
 const ONEKEY_SEARCH_HEADER_HEIGHT: f32 = 32.;
-/// OneKey 菜单 Scrollable 区域的最大高度,避免几十/几百条凭据时盖住终端。
 const ONEKEY_MENU_MAX_HEIGHT: f32 = 360.;
 
 /// The minimum amount of mouse-drag to consider a selection to
@@ -679,10 +676,8 @@ const MIN_DELTA_FOR_TEXT_SELECTION: f32 = 0.5;
 
 /// Notifications-specific info
 /// TODO (suraj): add documentation for notifications in gitbook
-const NOTIFICATIONS_LEARN_MORE_URL: &str =
-    "";
-pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str =
-    "";
+const NOTIFICATIONS_LEARN_MORE_URL: &str = "";
+pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str = "";
 
 const DEBOUNCE_PERIOD: Duration = Duration::from_millis(40);
 
@@ -1225,7 +1220,7 @@ impl SizeUpdateBuilder {
                 // For a shared session viewer, we want to use the larger
                 // of our own size and the sharer's size.
                 // However, if the viewer is actively reporting its size to the sharer
-                // (viewer-driven sizing), skip the MAX — the PTY is already at our size.
+                // (viewer-driven sizing), skip the MAX 閳?the PTY is already at our size.
                 if let Some(Viewer {
                     sharer_size,
                     last_reported_natural_size,
@@ -1779,6 +1774,8 @@ pub enum Event {
         buffer_text: String,
         results_tx: async_channel::Sender<Vec<ShellCompletion>>,
     },
+    ZmodemTransferPaths(ZmodemTransferPaths),
+    AbortZmodemSilently,
     /// Emitted when the user clicks "install" in the SSH remote-server choice block.
     RemoteServerInstallRequested {
         session_id: SessionId,
@@ -1807,9 +1804,7 @@ pub enum Event {
         target: FileTarget,
         line_col: Option<LineAndColumnArg>,
     },
-    /// Zap:终端里 Ctrl/Cmd+点击远端 SSH 会话输出中的文件路径时发出。
-    /// 走 buffer-sync 协议在编辑器里打开远端文件,而不是本地 `OpenFileWithTarget`。
-    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+    /// Zap:缂佸牏顏柌?Ctrl/Cmd+閻愮懓鍤潻婊咁伂 SSH 娴兼俺鐦芥潏鎾冲毉娑擃厾娈戦弬鍥︽鐠侯垰绶為弮璺哄絺閸戞亽鈧?    /// 鐠?buffer-sync 閸楀繗顔呴崷銊х椽鏉堟垵娅掗柌灞惧ⅵ瀵偓鏉╂粎顏弬鍥︽,閼板奔绗夐弰顖涙拱閸?`OpenFileWithTarget`閵?    #[cfg(all(feature = "local_tty", feature = "local_fs"))]
     OpenRemoteFileFromTerminal {
         remote_path: crate::code::buffer_location::RemotePath,
         line_col: Option<LineAndColumnArg>,
@@ -1908,25 +1903,35 @@ pub enum SyncInputType {
 #[derive(Debug, Copy, Clone)]
 pub enum ContextMenuType {
     /// Opened via right-clicking within any block or using a block's 3-dot menu.
-    BlockList { menu_source: BlockListMenuSource },
+    BlockList {
+        menu_source: BlockListMenuSource,
+    },
     /// Opened via right-clicking anywhere on the alt-screen.
-    AltScreen { position: Vector2F },
+    AltScreen {
+        position: Vector2F,
+    },
     /// Opened via right-clicking on the input prompt.
-    Prompt { position: Vector2F },
+    Prompt {
+        position: Vector2F,
+    },
     /// Opened via right-clicking on the input box.
-    Input { position: Vector2F },
-    /// 检测到 PTY 输出密码提示后自动打开。
+    Input {
+        position: Vector2F,
+    },
     OneKeyPrompt,
-    /// 检测到 su root + 密码提示后弹出确认菜单。
     SuRootPasswordConfirm,
 
     /// Lists the block(s) or text attached as context to the query represented in the AI block
     /// whose view id is the given [`EntityId`]. The menu is opened by clicking on the attached
     /// context chip inside the AI block.
-    AIBlockAttachedContext { ai_block_view_id: EntityId },
+    AIBlockAttachedContext {
+        ai_block_view_id: EntityId,
+    },
     /// Shows the overflow menu with copy options for an AI block. The menu is opened by clicking
     /// on the overflow (three dots) button inside the AI block header.
-    AIBlockOverflowMenu { ai_block_view_id: EntityId },
+    AIBlockOverflowMenu {
+        ai_block_view_id: EntityId,
+    },
 }
 
 impl ContextMenuType {
@@ -1975,7 +1980,9 @@ impl ContextMenuInfo {
             ContextMenuType::BlockList { .. } => "Block",
             ContextMenuType::Prompt { .. } => "Prompt",
             ContextMenuType::Input { .. } => "Input",
-            ContextMenuType::OneKeyPrompt | ContextMenuType::SuRootPasswordConfirm => "OneKeyPrompt",
+            ContextMenuType::OneKeyPrompt | ContextMenuType::SuRootPasswordConfirm => {
+                "OneKeyPrompt"
+            }
             ContextMenuType::AltScreen { .. } => "AltScreen",
             ContextMenuType::AIBlockAttachedContext { .. } => "AIBlockContextList",
             ContextMenuType::AIBlockOverflowMenu { .. } => "AIBlockOverflowMenu",
@@ -1996,7 +2003,9 @@ impl ContextMenuInfo {
             },
             ContextMenuType::Prompt { .. } => "RightClick",
             ContextMenuType::Input { .. } => "RightClick",
-            ContextMenuType::OneKeyPrompt | ContextMenuType::SuRootPasswordConfirm => "PasswordPrompt",
+            ContextMenuType::OneKeyPrompt | ContextMenuType::SuRootPasswordConfirm => {
+                "PasswordPrompt"
+            }
             ContextMenuType::AltScreen { .. } => "AltScreen",
             ContextMenuType::AIBlockAttachedContext { .. } => "AIBlockAttachedBlockChipLeftClick",
             ContextMenuType::AIBlockOverflowMenu { .. } => "AIBlockOverflowMenuClick",
@@ -2280,6 +2289,513 @@ struct OneKeyPromptCandidate {
     kind: OneKeyCredentialKind,
 }
 
+#[derive(Clone, Debug)]
+enum ZmodemTransferViewState {
+    Idle,
+    AwaitingUpload,
+    AwaitingDownloadDirectory,
+    UploadStarting,
+    Transferring {
+        direction: ZmodemDirection,
+        file_name: Option<String>,
+        path: Option<PathBuf>,
+        transferred: u64,
+        total: Option<u64>,
+        started_at: Instant,
+        last_rendered_at: Instant,
+    },
+    Completed {
+        direction: ZmodemDirection,
+        file_name: Option<String>,
+        path: Option<PathBuf>,
+    },
+    Cancelled {
+        direction: ZmodemDirection,
+    },
+    Failed {
+        direction: Option<ZmodemDirection>,
+        message: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct ZmodemTransferSnapshot {
+    path: Option<PathBuf>,
+    started_at: Instant,
+    last_rendered_at: Instant,
+}
+
+impl Default for ZmodemTransferViewState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl ZmodemTransferViewState {
+    fn is_awaiting_upload(&self) -> bool {
+        matches!(self, Self::AwaitingUpload)
+    }
+
+    fn accepts_upload_paths(&self) -> bool {
+        matches!(self, Self::AwaitingUpload | Self::UploadStarting)
+    }
+
+    fn should_render(&self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+
+    fn should_auto_hide(&self) -> bool {
+        matches!(self, Self::Completed { .. } | Self::Cancelled { .. })
+    }
+
+    fn current_transfer_snapshot(&self) -> Option<ZmodemTransferSnapshot> {
+        match self {
+            Self::Transferring {
+                path,
+                started_at,
+                last_rendered_at,
+                ..
+            } => Some(ZmodemTransferSnapshot {
+                path: path.clone(),
+                started_at: *started_at,
+                last_rendered_at: *last_rendered_at,
+            }),
+            Self::Idle
+            | Self::AwaitingUpload
+            | Self::AwaitingDownloadDirectory
+            | Self::UploadStarting
+            | Self::Completed { .. }
+            | Self::Cancelled { .. }
+            | Self::Failed { .. } => None,
+        }
+    }
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+struct LegacySshZmodemUploadTask {
+    generation: u64,
+    cancellation: crate::terminal::zmodem_ssh::LegacySshZmodemUploadCancellation,
+    handle: SpawnedFutureHandle,
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+struct LegacySshZmodemUploadContext {
+    session_id: SessionId,
+    socket_path: PathBuf,
+    wsl_distro: Option<String>,
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+struct DirectSshZmodemUploadContext {
+    session_id: Option<SessionId>,
+    connection_info: InteractiveSshCommand,
+    ssh_command: Option<String>,
+    ssh_manager_auth: Option<SshManagerZmodemAuthContext>,
+    cwd: Option<String>,
+    detect_remote_rz_cwd: bool,
+    wsl_distro: Option<String>,
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+#[derive(Clone, Debug)]
+struct SshManagerZmodemAuthContext {
+    ssh_command: String,
+    secret_lookup_id: String,
+    secret_kind: warp_ssh_manager::SecretKind,
+    auth_type: warp_ssh_manager::AuthType,
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ParsedDirectSshTarget {
+    username: Option<String>,
+    host: String,
+    port: u16,
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+enum SshZmodemUploadContext {
+    ControlMaster(LegacySshZmodemUploadContext),
+    Direct(DirectSshZmodemUploadContext),
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn legacy_ssh_zmodem_upload_context<'a>(
+    candidate_session_ids: &[SessionId],
+    sessions: &'a Sessions,
+    control_path_for_session: impl Fn(SessionId) -> Option<&'a PathBuf>,
+) -> Option<LegacySshZmodemUploadContext> {
+    for session_id in candidate_session_ids {
+        let mut current_session_id = Some(*session_id);
+        while let Some(session_id) = current_session_id {
+            let Some(session) = sessions.get(session_id) else {
+                break;
+            };
+            let socket_path = session
+                .legacy_ssh_socket_path()
+                .or_else(|| control_path_for_session(session_id));
+            if let Some(socket_path) = socket_path {
+                return Some(LegacySshZmodemUploadContext {
+                    session_id,
+                    socket_path: socket_path.clone(),
+                    wsl_distro: session.wsl_distro_name().map(ToOwned::to_owned),
+                });
+            }
+            current_session_id = session.spawning_session_id();
+        }
+    }
+    None
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn direct_ssh_zmodem_upload_context(
+    candidate_session_ids: &[SessionId],
+    sessions: &Sessions,
+    cwd: Option<String>,
+    ssh_manager_auth_by_session: &HashMap<SessionId, SshManagerZmodemAuthContext>,
+    pending_ssh_manager_auth: Option<&SshManagerZmodemAuthContext>,
+) -> Option<DirectSshZmodemUploadContext> {
+    log::info!(
+        "ZMODEM direct ssh context lookup: candidates={candidate_session_ids:?}, auth_sessions={:?}",
+        ssh_manager_auth_by_session.keys().collect::<Vec<_>>()
+    );
+    for session_id in candidate_session_ids {
+        let mut current_session_id = Some(*session_id);
+        let mut fallback_remote_context = None;
+        while let Some(session_id) = current_session_id {
+            let Some(session) = sessions.get(session_id) else {
+                log::info!("ZMODEM direct ssh context lookup: session {session_id:?} not found");
+                break;
+            };
+            if let Some(connection_info) = session
+                .subshell_info()
+                .as_ref()
+                .and_then(|info| info.ssh_connection_info.as_ref())
+                .filter(|connection_info| {
+                    connection_info
+                        .host
+                        .as_deref()
+                        .is_some_and(|host| !host.is_empty())
+                })
+            {
+                let ssh_command = session
+                    .subshell_info()
+                    .as_ref()
+                    .map(|info| info.spawning_command.clone());
+                let ssh_manager_auth = ssh_manager_auth_by_session
+                    .get(&session_id)
+                    .cloned()
+                    .or_else(|| {
+                        ssh_command.as_deref().and_then(|ssh_command| {
+                            pending_ssh_manager_auth_for_command(
+                                ssh_command,
+                                pending_ssh_manager_auth,
+                            )
+                        })
+                    });
+                if ssh_manager_auth.is_some()
+                    && !ssh_manager_auth_by_session.contains_key(&session_id)
+                {
+                    log::info!(
+                        "ZMODEM direct ssh context using pending SSH Manager auth for subshell session {session_id:?}"
+                    );
+                }
+                log::info!(
+                    "ZMODEM direct ssh context matched subshell session {session_id:?}: has_auth={}, host={:?}, wsl_distro={:?}",
+                    ssh_manager_auth.is_some(),
+                    connection_info.host,
+                    session.wsl_distro_name()
+                );
+                return Some(DirectSshZmodemUploadContext {
+                    session_id: Some(session_id),
+                    connection_info: connection_info.clone(),
+                    ssh_command,
+                    ssh_manager_auth,
+                    cwd,
+                    detect_remote_rz_cwd: false,
+                    wsl_distro: session.wsl_distro_name().map(ToOwned::to_owned),
+                });
+            }
+
+            if fallback_remote_context.is_none()
+                && (!session.is_local() || session.is_legacy_ssh_session())
+            {
+                log::info!(
+                    "ZMODEM direct ssh context prepared fallback session {session_id:?}: is_local={}, is_legacy_ssh={}, has_auth={}, wsl_distro={:?}",
+                    session.is_local(),
+                    session.is_legacy_ssh_session(),
+                    ssh_manager_auth_by_session.contains_key(&session_id),
+                    session.wsl_distro_name()
+                );
+                fallback_remote_context = Some(DirectSshZmodemUploadContext {
+                    session_id: Some(session_id),
+                    connection_info: InteractiveSshCommand {
+                        host: Some(format!("{}@{}", session.user(), session.hostname())),
+                        port: None,
+                    },
+                    ssh_command: None,
+                    ssh_manager_auth: ssh_manager_auth_by_session.get(&session_id).cloned(),
+                    cwd: cwd.clone(),
+                    detect_remote_rz_cwd: false,
+                    wsl_distro: session.wsl_distro_name().map(ToOwned::to_owned),
+                });
+            }
+
+            current_session_id = session.spawning_session_id();
+        }
+        if fallback_remote_context.is_some() {
+            log::info!(
+                "ZMODEM direct ssh context using fallback for candidate session {session_id:?}"
+            );
+            return fallback_remote_context;
+        }
+    }
+    log::info!("ZMODEM direct ssh context lookup found no match");
+    None
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn pending_ssh_manager_auth_for_command(
+    command: &str,
+    pending_ssh_manager_auth: Option<&SshManagerZmodemAuthContext>,
+) -> Option<SshManagerZmodemAuthContext> {
+    pending_ssh_manager_auth.and_then(|auth_context| {
+        if auth_context.ssh_command == command {
+            Some(auth_context.clone())
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn ssh_manager_auth_for_direct_ssh_command(
+    session_id: Option<SessionId>,
+    candidate_session_ids: &[SessionId],
+    command: &str,
+    ssh_manager_auth_by_session: &HashMap<SessionId, SshManagerZmodemAuthContext>,
+    pending_ssh_manager_auth: Option<&SshManagerZmodemAuthContext>,
+) -> (Option<SessionId>, Option<SshManagerZmodemAuthContext>) {
+    let auth_source_session_id = session_id
+        .filter(|session_id| ssh_manager_auth_by_session.contains_key(session_id))
+        .or_else(|| {
+            candidate_session_ids.iter().copied().find(|session_id| {
+                ssh_manager_auth_by_session
+                    .get(session_id)
+                    .is_some_and(|auth_context| auth_context.ssh_command == command)
+            })
+        })
+        .or_else(|| {
+            ssh_manager_auth_by_session
+                .iter()
+                .find_map(|(session_id, auth_context)| {
+                    if auth_context.ssh_command == command {
+                        Some(*session_id)
+                    } else {
+                        None
+                    }
+                })
+        });
+    let ssh_manager_auth = auth_source_session_id
+        .and_then(|session_id| ssh_manager_auth_by_session.get(&session_id).cloned())
+        .or_else(|| pending_ssh_manager_auth_for_command(command, pending_ssh_manager_auth));
+    (auth_source_session_id, ssh_manager_auth)
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn parse_remote_sz_command(command: &str) -> Option<Vec<String>> {
+    let tokens = shell_words::split(command).ok()?;
+    if tokens.is_empty() {
+        return None;
+    }
+    let unsupported_shell_tokens = ["|", "||", "&&", ";", "&", "<", ">", "2>", ">>", "<<"];
+    if tokens
+        .iter()
+        .any(|token| unsupported_shell_tokens.contains(&token.as_str()))
+    {
+        return None;
+    }
+    let command_name = tokens
+        .first()?
+        .rsplit('/')
+        .next()
+        .unwrap_or(tokens.first()?);
+    if command_name != "sz" {
+        return None;
+    }
+    Some(tokens)
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn parse_direct_ssh_target(
+    connection_info: &InteractiveSshCommand,
+) -> Option<ParsedDirectSshTarget> {
+    let raw_host = connection_info.host.as_deref()?.trim();
+    if raw_host.is_empty() {
+        return None;
+    }
+    let (username, host) = match raw_host.rsplit_once('@') {
+        Some((username, host)) if !host.is_empty() => {
+            let username = if username.is_empty() {
+                None
+            } else {
+                Some(username.to_string())
+            };
+            (username, host.to_string())
+        }
+        Some((_username, _host)) => return None,
+        None => (None, raw_host.to_string()),
+    };
+    let port = match connection_info.port.as_deref() {
+        Some(port) if !port.is_empty() => port.parse().ok()?,
+        Some(_) | None => 22,
+    };
+    Some(ParsedDirectSshTarget {
+        username,
+        host,
+        port,
+    })
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn ssh_server_matches_direct_target(
+    server: &warp_ssh_manager::SshServerInfo,
+    resolved_auth: &warp_ssh_manager::ResolvedSshAuth,
+    target: &ParsedDirectSshTarget,
+) -> bool {
+    direct_target_match_detail(server, resolved_auth, target).is_exact_match()
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DirectSshTargetMatchDetail {
+    host_matches: bool,
+    port_matches: bool,
+    username_matches: bool,
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+impl DirectSshTargetMatchDetail {
+    fn is_exact_match(self) -> bool {
+        self.host_matches && self.port_matches && self.username_matches
+    }
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn direct_target_match_detail(
+    server: &warp_ssh_manager::SshServerInfo,
+    resolved_auth: &warp_ssh_manager::ResolvedSshAuth,
+    target: &ParsedDirectSshTarget,
+) -> DirectSshTargetMatchDetail {
+    DirectSshTargetMatchDetail {
+        host_matches: server.host == target.host,
+        port_matches: server.port == target.port,
+        username_matches: target
+            .username
+            .as_deref()
+            .is_none_or(|username| resolved_auth.username == username),
+    }
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn log_ssh_manager_zmodem_auth_fallback_diagnostics(
+    connection_info: &InteractiveSshCommand,
+    servers: &[(
+        warp_ssh_manager::SshServerInfo,
+        warp_ssh_manager::ResolvedSshAuth,
+    )],
+) {
+    let Some(target) = parse_direct_ssh_target(connection_info) else {
+        log::info!(
+            "ZMODEM direct ssh SSH Manager server fallback could not parse target: host={:?}, port={:?}, candidate_count={}",
+            connection_info.host,
+            connection_info.port,
+            servers.len()
+        );
+        return;
+    };
+
+    let exact_match_count = servers
+        .iter()
+        .filter(|(server, resolved_auth)| {
+            direct_target_match_detail(server, resolved_auth, &target).is_exact_match()
+        })
+        .count();
+    log::info!(
+        "ZMODEM direct ssh SSH Manager server fallback diagnostics: target_host={}, target_username={:?}, target_port={}, candidate_count={}, exact_match_count={exact_match_count}",
+        target.host,
+        target.username,
+        target.port,
+        servers.len()
+    );
+
+    for (idx, (server, resolved_auth)) in servers.iter().take(10).enumerate() {
+        let detail = direct_target_match_detail(server, resolved_auth, &target);
+        log::info!(
+            "ZMODEM direct ssh SSH Manager candidate {idx}: server_host={}, server_port={}, resolved_username={}, auth_type={:?}, secret_kind={:?}, host_matches={}, port_matches={}, username_matches={}",
+            server.host,
+            server.port,
+            resolved_auth.username,
+            resolved_auth.auth_type,
+            resolved_auth.secret_kind,
+            detail.host_matches,
+            detail.port_matches,
+            detail.username_matches
+        );
+    }
+    if servers.len() > 10 {
+        log::info!(
+            "ZMODEM direct ssh SSH Manager fallback diagnostics truncated: omitted_candidate_count={}",
+            servers.len() - 10
+        );
+    }
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn ssh_manager_zmodem_auth_context_from_server(
+    ssh_command: &str,
+    resolved_auth: warp_ssh_manager::ResolvedSshAuth,
+) -> SshManagerZmodemAuthContext {
+    SshManagerZmodemAuthContext {
+        ssh_command: ssh_command.to_string(),
+        secret_lookup_id: resolved_auth.secret_lookup_id,
+        secret_kind: resolved_auth.secret_kind,
+        auth_type: resolved_auth.auth_type,
+    }
+}
+
+#[cfg(all(windows, feature = "local_tty"))]
+fn find_ssh_manager_zmodem_auth_context_from_servers<I>(
+    connection_info: &InteractiveSshCommand,
+    ssh_command: &str,
+    servers: I,
+) -> Option<SshManagerZmodemAuthContext>
+where
+    I: IntoIterator<
+        Item = (
+            warp_ssh_manager::SshServerInfo,
+            warp_ssh_manager::ResolvedSshAuth,
+        ),
+    >,
+{
+    let target = parse_direct_ssh_target(connection_info)?;
+    let mut matches = servers.into_iter().filter_map(|(server, resolved_auth)| {
+        if ssh_server_matches_direct_target(&server, &resolved_auth, &target) {
+            Some(ssh_manager_zmodem_auth_context_from_server(
+                ssh_command,
+                resolved_auth,
+            ))
+        } else {
+            None
+        }
+    });
+    let auth_context = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(auth_context)
+}
+
 pub struct TerminalView {
     pub model: Arc<FairMutex<TerminalModel>>,
     view_handle: WeakViewHandle<Self>,
@@ -2325,17 +2841,9 @@ pub struct TerminalView {
     context_menu_state: Option<ContextMenuState>,
     onekey_prompt_candidates: Vec<OneKeyPromptCandidate>,
     onekey_last_prompt_at: Option<Instant>,
-    /// OneKey 菜单顶部的搜索输入框。常驻字段,与 TerminalView 同生命周期;
-    /// 菜单关闭时通过 `clear_buffer` 重置内容,而不是销毁 ViewHandle——
-    /// 因为框架未提供 view 释放 API,丢弃 handle 不会注销订阅,
-    /// 反复创建会泄漏并让旧订阅干扰新菜单。
     onekey_search_editor: ViewHandle<EditorView>,
-    /// 当前 OneKey 搜索框中的查询字符串,影响菜单 items 列表的过滤与排序。
     onekey_query: String,
-    /// `secret_injector` 起飞后到完成/超时之间为 true。OneKey listener 看到
-    /// true 直接跳过,避免与自动注入同时弹菜单。
     ssh_secret_auto_injection_in_flight: bool,
-    /// 检测到 su root 密码提示时暂存 root 密码,等待用户确认后注入。
     pub(crate) su_root_password: Option<zeroize::Zeroizing<String>>,
     su_root_onekey_candidates: Vec<usize>,
 
@@ -2398,9 +2906,12 @@ pub struct TerminalView {
     /// `pane_tree_from_template_recursive` when a tab config has both
     /// commands and `PaneMode::Agent`.
     enter_agent_view_after_pending_commands: bool,
-    /// SSH 管理器创建的 tab 会先启动本地 shell，再执行 ssh 并等待远端 shell
-    /// bootstrap；默认 Agent 模式必须延后到远端会话可用后再进入。
+    /// SSH 缁狅紕鎮婇崳銊ュ灡瀵よ櫣娈?tab 娴兼艾鍘涢崥顖氬З閺堫剙婀?shell閿涘苯鍟€閹笛嗩攽 ssh 楠炲墎鐡戝鍛扮箼缁?shell
     enter_agent_view_after_ssh_bootstrap: bool,
+    #[cfg(all(windows, feature = "local_tty"))]
+    pending_ssh_manager_zmodem_auth: Option<SshManagerZmodemAuthContext>,
+    #[cfg(all(windows, feature = "local_tty"))]
+    ssh_manager_zmodem_auth_by_session: HashMap<SessionId, SshManagerZmodemAuthContext>,
     slow_bootstrap_banner: ViewHandle<Banner<TerminalAction>>,
     is_slow_bootstrap_banner_open: bool,
 
@@ -2443,13 +2954,6 @@ pub struct TerminalView {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     file_link_scanning_join_handle: Option<JoinHandle<()>>,
 
-    /// Zap:远端 SSH 会话的 cwd 目录列表缓存,用于精确校验终端文件链接。
-    ///
-    /// 键是 `(session_id, cwd 绝对路径)`,值为该目录的真实子项列表;`None`
-    /// 表示该 cwd 的列表正在异步拉取中(daemon `ListDirectory` RPC)。
-    /// 用 `IndexMap` 保持插入顺序,容量上限定义在
-    /// `link_detection::remote_dir_listing_context` 中的 `MAX_ENTRIES`,
-    /// 拉取新 cwd 触发 FIFO 淘汰。本地会话永不写入此缓存。
     #[cfg(all(
         feature = "local_tty",
         feature = "local_fs",
@@ -2593,6 +3097,14 @@ pub struct TerminalView {
 
     /// The file uploads initiated in this terminal pane.
     ssh_file_upload: ViewHandle<FileUpload>,
+
+    zmodem_transfer: ZmodemTransferViewState,
+    zmodem_spinner_handle: SpinnerStateHandle,
+    zmodem_transfer_generation: u64,
+    #[cfg(all(windows, feature = "local_tty"))]
+    active_ssh_zmodem_generation: Option<u64>,
+    #[cfg(all(windows, feature = "local_tty"))]
+    legacy_ssh_zmodem_upload: Option<LegacySshZmodemUploadTask>,
 
     /// The type of the shell that this terminal pane is running, derived and
     /// cached on the view from [`ShellLaunchdata`]. Used to render an indicator
@@ -3513,11 +4025,10 @@ impl TerminalView {
             &ai_action_model.as_ref(ctx).shell_command_executor(ctx),
             Self::handle_shell_command_executor_event,
         );
-        // Zap BYOP:订阅 suggest_prompt 工具的 chip event,把模型主动建议的 prompt
-        // 渲染成 input 上方的 chip。原版 emit 被 PromptSuggestionsViaMAA cargo feature
-        // gate(`action_model/execute/suggest_prompt.rs:56`),OSS 默认无人订阅 → chip
-        // 永远不显示 → oneshot channel 永挂 → conversation 卡死。已去掉 emit gate,
-        // 这里补上 view 层订阅。
+        // Zap BYOP:鐠併垽妲?suggest_prompt 瀹搞儱鍙块惃?chip event,閹跺﹥膩閸ㄥ瀵岄崝銊ョ紦鐠侇喚娈?prompt
+        // 濞撳弶鐓嬮幋?input 娑撳﹥鏌熼惃?chip閵嗗倸甯悧?emit 鐞?PromptSuggestionsViaMAA cargo feature
+        // gate(`action_model/execute/suggest_prompt.rs:56`),OSS 姒涙顓婚弮鐘辨眽鐠併垽妲?閳?chip
+        // 濮樻瓕绻欐稉宥嗘▔缁€?閳?oneshot channel 濮樺憡瀵?閳?conversation 閸椻剝顒撮妴鍌氬嚒閸樼粯甯€ emit gate,
         ctx.subscribe_to_model(
             &ai_action_model.as_ref(ctx).suggest_prompt_executor(ctx),
             Self::handle_suggest_prompt_executor_event,
@@ -3745,25 +4256,23 @@ impl TerminalView {
 
         let ssh_file_upload = ctx.add_typed_action_view(|_| FileUpload::new());
 
-        if FeatureFlag::SshDragAndDrop.is_enabled() {
-            ctx.subscribe_to_view(&ssh_file_upload, |_terminal, _file_upload, event, ctx| {
-                // Pass the file upload events up so they can be processed by the pane group.
-                match event {
-                    FileUploadEvent::CopyFileToRemote { command, upload_id } => {
-                        ctx.emit(Event::CopyFileToRemote {
-                            command: command.clone(),
-                            upload_id: *upload_id,
-                        });
-                    }
-                    FileUploadEvent::OpenUploadSession(upload_id) => {
-                        ctx.emit(Event::OpenFileUploadSession(*upload_id));
-                    }
-                    FileUploadEvent::TerminateUploadSession(upload_id) => {
-                        ctx.emit(Event::TerminateFileUploadSession(*upload_id));
-                    }
+        ctx.subscribe_to_view(&ssh_file_upload, |_terminal, _file_upload, event, ctx| {
+            // Pass the file upload events up so they can be processed by the pane group.
+            match event {
+                FileUploadEvent::CopyFileToRemote { command, upload_id } => {
+                    ctx.emit(Event::CopyFileToRemote {
+                        command: command.clone(),
+                        upload_id: *upload_id,
+                    });
                 }
-            });
-        }
+                FileUploadEvent::OpenUploadSession(upload_id) => {
+                    ctx.emit(Event::OpenFileUploadSession(*upload_id));
+                }
+                FileUploadEvent::TerminateUploadSession(upload_id) => {
+                    ctx.emit(Event::TerminateFileUploadSession(*upload_id));
+                }
+            }
+        });
 
         let onekey_pty_reads_rx = inactive_pty_reads_rx.clone();
         if FeatureFlag::OneKeyPrompt.is_enabled() {
@@ -3889,6 +4398,10 @@ impl TerminalView {
             awaiting_pending_command_completion: false,
             enter_agent_view_after_pending_commands: false,
             enter_agent_view_after_ssh_bootstrap: false,
+            #[cfg(all(windows, feature = "local_tty"))]
+            pending_ssh_manager_zmodem_auth: None,
+            #[cfg(all(windows, feature = "local_tty"))]
+            ssh_manager_zmodem_auth_by_session: HashMap::new(),
             slow_bootstrap_banner,
             is_slow_bootstrap_banner_open: false,
             incompatible_configuration_banner,
@@ -3956,6 +4469,13 @@ impl TerminalView {
             is_file_drop_target: false,
             is_ssh_file_uploader: false,
             ssh_file_upload,
+            zmodem_transfer: Default::default(),
+            zmodem_spinner_handle: SpinnerStateHandle::new(),
+            zmodem_transfer_generation: 0,
+            #[cfg(all(windows, feature = "local_tty"))]
+            active_ssh_zmodem_generation: None,
+            #[cfg(all(windows, feature = "local_tty"))]
+            legacy_ssh_zmodem_upload: None,
             most_recent_command_correction: None,
             shell_indicator_type: None,
             shell_detail: None,
@@ -4280,7 +4800,6 @@ impl TerminalView {
     }
 
     fn can_pop_nested_ambient_agent_view(&self, _ctx: &AppContext) -> bool {
-        // openWarp:ambient_agent 已删除,nested agent view 永远不存在。
         false
     }
 
@@ -4395,7 +4914,7 @@ impl TerminalView {
                 .contains(&ContextChipKind::GitDiffStats)
     }
 
-    /// No-op when the `local_fs` feature is disabled – git status is not
+    /// No-op when the `local_fs` feature is disabled 閳?git status is not
     /// available so there is nothing to subscribe to.
     #[cfg(not(feature = "local_fs"))]
     fn update_git_status_subscription(&mut self, _ctx: &mut ViewContext<Self>) {}
@@ -4454,7 +4973,7 @@ impl TerminalView {
             // If the conversation still has a subagent in flight (e.g. a CLI
             // subagent managing a long-running command), the response stream
             // that just ended belongs to the subagent or to the main agent
-            // handing off to it — not the end of the overall turn. Defer
+            // handing off to it 閳?not the end of the overall turn. Defer
             // conversation-finished side effects (e.g. firing a queued `/queue`
             // prompt) until the entire turn is actually done.
             let has_active_subagent = || {
@@ -4476,7 +4995,7 @@ impl TerminalView {
                 //
                 // However, if the active block belongs to the same conversation
                 // that has the queued prompt (e.g. a blocked tool-call approval),
-                // keep the pending query — the conversation hasn't truly moved on.
+                // keep the pending query 閳?the conversation hasn't truly moved on.
                 let active_block_conversation_id = active_ai_block.as_ref(ctx).conversation_id();
                 let pending_query_conversation_id = self.pending_user_query_conversation_id();
                 let is_same_conversation = pending_query_conversation_id
@@ -5355,7 +5874,7 @@ impl TerminalView {
                 log::info!(
                     "[byop-diag] CLISubagentEvent::SpawnedSubagent received: \
                      block_id={block_id:?} task_id={task_id:?} conv={conversation_id:?} \
-                     → 创建 CLISubagentView 加进 cli_subagent_views map"
+                     閳?閸掓稑缂?CLISubagentView 閸旂姾绻?cli_subagent_views map"
                 );
                 self.create_cli_subagent_view(
                     block_id.clone(),
@@ -5721,7 +6240,7 @@ impl TerminalView {
                         .map(|m| !m.stats_against_head.has_no_changes());
                     match is_dirty {
                         Some(true) => ctx.emit(event_constructor(arg)),
-                        // Metadata not loaded yet — defer until the next
+                        // Metadata not loaded yet 閳?defer until the next
                         // git repo status update delivers it.
                         None => {
                             self.deferred_code_review_open = Some(DeferredCodeReviewOpen {
@@ -6384,6 +6903,24 @@ impl TerminalView {
         })
     }
 
+    fn active_session_is_ssh<C: ModelAsRef>(&self, ctx: &C) -> bool {
+        let is_warpified_ssh = self.model.lock().is_warpified_ssh();
+        let active_session = self
+            .current_active_block_session_id()
+            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id));
+        let is_legacy_ssh = active_session
+            .as_ref()
+            .is_some_and(|session| session.is_legacy_ssh_session());
+        let is_interactive_ssh_subshell = active_session.as_ref().is_some_and(|session| {
+            session
+                .subshell_info()
+                .as_ref()
+                .and_then(|info| info.ssh_connection_info.as_ref())
+                .is_some_and(|ssh_connection_info| ssh_connection_info.host.is_some())
+        });
+        is_warpified_ssh || is_legacy_ssh || is_interactive_ssh_subshell
+    }
+
     /// Returns whether or not the active session is a local session.  Returns
     /// None if there is no active session.
     pub fn active_session_is_local<C: ModelAsRef>(&self, ctx: &C) -> Option<bool> {
@@ -6426,6 +6963,10 @@ impl TerminalView {
         self.active_block_metadata
             .as_ref()
             .and_then(BlockMetadata::session_id)
+    }
+
+    fn current_active_block_session_id(&self) -> Option<SessionId> {
+        self.model.lock().active_block_metadata().session_id()
     }
 
     pub fn active_session_shell_type<C: ModelAsRef>(&self, ctx: &C) -> Option<ShellType> {
@@ -7093,7 +7634,7 @@ impl TerminalView {
         {
             // No unfinished AI block, but the conversation is still in progress.
             // This happens when a server-side subagent (e.g., conversation search)
-            // is running — the parent AI block is already finished but the response
+            // is running 閳?the parent AI block is already finished but the response
             // stream is still active. Route Ctrl+C to the status bar to cancel it.
             self.cancel_active_conversation_via_status_bar(ctx);
         } else if self
@@ -7381,9 +7922,7 @@ impl TerminalView {
         ctx.emit(Event::WriteBytesToPty { bytes: data.into() });
     }
 
-    /// 暴露 PTY 输出广播接收端,给非录制订阅者用(目前是 SSH manager 的
-    /// SecretInjector,见 `app/src/ssh_manager/secret_injector.rs`)。返回
-    /// `None` 表示当前会话不是 local TTY(wasm / 远端会话)。
+    /// 閺嗘挳婀?PTY 鏉堟挸鍤獮鎸庢尡閹恒儲鏁圭粩?缂佹瑩娼ぐ鏇炲煑鐠併垽妲勯懓鍛暏(閻╊喖澧犻弰?SSH manager 閻?    /// SecretInjector,鐟?`app/src/ssh_manager/secret_injector.rs`)閵嗗倽绻戦崶?    /// `None` 鐞涖劎銇氳ぐ鎾冲娴兼俺鐦芥稉宥嗘Ц local TTY(wasm / 鏉╂粎顏导姘崇樈)閵?    pub fn inactive_pty_reads_rx(
     pub fn inactive_pty_reads_rx(
         &self,
         ctx: &warpui::AppContext,
@@ -8662,8 +9201,7 @@ impl TerminalView {
         let should_start_new_conversation = suggestion.should_start_new_conversation;
         let conversation_id = banner_state.conversation_id;
         let trigger_block_id = trigger.as_ref().and_then(|t| t.block_id());
-        // Zap BYOP:克隆 byop_action_id + prompt,用于 accept 末尾通知 executor
-        // (`complete_suggest_prompt_action(Accepted { query })` 关 oneshot channel)。
+        // Zap BYOP:閸忓娈?byop_action_id + prompt,閻劋绨?accept 閺堫偄鐔柅姘辩叀 executor
         let byop_banner_for_completion = banner_state
             .byop_action_id
             .is_some()
@@ -8761,17 +9299,13 @@ impl TerminalView {
             );
         }
 
-        // Zap BYOP:模型主动建议的 chip 被用户接受 → 通知 executor 关
-        // oneshot channel,让 BYOP loop 拿到 `Accepted{query}` result,模型下一轮
-        // 可见到"用户已采纳并提交了那条 prompt"的 tool_result。
         if let Some(banner) = byop_banner_for_completion.as_ref() {
             self.complete_byop_suggest_prompt_if_needed(
                 banner,
                 Some(prompt_for_byop_completion),
                 ctx,
             );
-            // 清掉 banner 防止下次 click 重复触发(reject path 已经 clear,accept
-            // path 之前没显式 clear,统一在这里清)。
+            // 濞撳懏甯€ banner 闂冨弶顒涙稉瀣偧 click 闁插秴顦茬憴锕€褰?reject path 瀹歌尙绮?clear,accept
             self.inline_banners_state.prompt_suggestions_banner = None;
             self.input.update(ctx, |input, ctx| {
                 input.set_prompt_suggestions_banner_state(None, ctx);
@@ -8935,9 +9469,11 @@ impl TerminalView {
         }
         self.remove_vim_mode_banner(ctx);
         VimBannerSettings::handle(ctx).update(ctx, |banner_settings, model_ctx| {
-            report_if_error!(banner_settings
-                .vim_keybindings_banner_state
-                .set_value(BannerState::Dismissed, model_ctx));
+            report_if_error!(
+                banner_settings
+                    .vim_keybindings_banner_state
+                    .set_value(BannerState::Dismissed, model_ctx)
+            );
         });
     }
 
@@ -9028,9 +9564,11 @@ impl TerminalView {
             }
             AwsBedrockLoginBannerAction::DontShowAgain => {
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                    report_if_error!(ai_settings
-                        .aws_bedrock_login_banner_dismissed
-                        .set_value(true, ctx));
+                    report_if_error!(
+                        ai_settings
+                            .aws_bedrock_login_banner_dismissed
+                            .set_value(true, ctx)
+                    );
                 });
             }
             AwsBedrockLoginBannerAction::Dismiss => {
@@ -10043,8 +10581,6 @@ impl TerminalView {
                                         },
                                     );
 
-                                    // 使用 OSC 9 通知的 agent 不会发结构化 SessionStart 事件，
-                                    // 因此在命令检测时主动创建监听器。
                                     if let Some((agent @ (CLIAgent::Codex | CLIAgent::DeepSeek), _)) =
                                         detection
                                     {
@@ -10853,6 +11389,9 @@ impl TerminalView {
                     ctx
                 );
             }
+            ModelEvent::Zmodem(event) => {
+                self.handle_zmodem_event(event, ctx);
+            }
             ModelEvent::BootstrapPrecmdDone => {
                 self.execute_pending_command((), ctx);
             }
@@ -10873,7 +11412,6 @@ impl TerminalView {
                     return;
                 }
 
-                // 如果当前 agent 已有监听器，OSC 9 通知由 agent 专属 handler 处理。
                 if title.is_none() {
                     let has_osc9_listener = CLIAgentSessionsModel::as_ref(ctx)
                         .session(self.view_id)
@@ -10905,7 +11443,7 @@ impl TerminalView {
                 // Drop the remote server client for this session before the
                 // user's outer ssh tunnel starts closing. The last
                 // `Arc<RemoteServerClient>` carries an owned `Child` for the
-                // `ssh … remote-server-proxy` subprocess; dropping it kills
+                // `ssh 閳?remote-server-proxy` subprocess; dropping it kills
                 // that child via `kill_on_drop`, which closes the
                 // multiplexed channel on the ControlMaster so the foreground
                 // ssh can exit cleanly instead of hanging.
@@ -11072,6 +11610,1265 @@ impl TerminalView {
             .with_padding_left(*PADDING_LEFT)
             .with_vertical_padding(8.)
             .finish()
+    }
+
+    fn handle_zmodem_event(&mut self, event: &ZmodemEvent, ctx: &mut ViewContext<Self>) {
+        match event {
+            ZmodemEvent::UploadRequested => {
+                self.advance_zmodem_transfer_generation();
+                self.zmodem_transfer = ZmodemTransferViewState::AwaitingUpload;
+                self.open_zmodem_upload_picker(ctx);
+                ctx.notify();
+            }
+            ZmodemEvent::DownloadDirectoryRequested => {
+                self.advance_zmodem_transfer_generation();
+                self.zmodem_transfer = ZmodemTransferViewState::AwaitingDownloadDirectory;
+                self.open_zmodem_download_directory_picker(ctx);
+                ctx.notify();
+            }
+            ZmodemEvent::AbortInteractiveReceiver => {
+                ctx.emit(Event::AbortZmodemSilently);
+            }
+            ZmodemEvent::Started { direction } => {
+                self.advance_zmodem_transfer_generation();
+                let now = Instant::now();
+                self.zmodem_transfer = ZmodemTransferViewState::Transferring {
+                    direction: *direction,
+                    file_name: None,
+                    path: None,
+                    transferred: 0,
+                    total: None,
+                    started_at: now,
+                    last_rendered_at: now,
+                };
+                ctx.notify();
+            }
+            ZmodemEvent::FileStarted {
+                direction,
+                name,
+                size,
+                path,
+            } => {
+                self.advance_zmodem_transfer_generation();
+                let now = Instant::now();
+                self.zmodem_transfer = ZmodemTransferViewState::Transferring {
+                    direction: *direction,
+                    file_name: Some(name.clone()),
+                    path: path.clone(),
+                    transferred: 0,
+                    total: *size,
+                    started_at: now,
+                    last_rendered_at: now,
+                };
+                ctx.notify();
+            }
+            ZmodemEvent::Progress {
+                direction,
+                name,
+                transferred,
+                total,
+            } => {
+                let now = Instant::now();
+                let previous = self.zmodem_transfer.current_transfer_snapshot();
+                let should_render = previous
+                    .as_ref()
+                    .map(|previous| {
+                        now.duration_since(previous.last_rendered_at)
+                            >= ZMODEM_PROGRESS_RENDER_INTERVAL
+                            || total.is_some_and(|total| total > 0 && *transferred >= total)
+                    })
+                    .unwrap_or(true);
+                if should_render {
+                    self.advance_zmodem_transfer_generation();
+                }
+                self.zmodem_transfer = ZmodemTransferViewState::Transferring {
+                    direction: *direction,
+                    file_name: Some(name.clone()),
+                    path: previous.as_ref().and_then(|previous| previous.path.clone()),
+                    transferred: *transferred,
+                    total: *total,
+                    started_at: previous
+                        .as_ref()
+                        .map(|previous| previous.started_at)
+                        .unwrap_or(now),
+                    last_rendered_at: if should_render {
+                        now
+                    } else {
+                        previous
+                            .as_ref()
+                            .map(|previous| previous.last_rendered_at)
+                            .unwrap_or(now)
+                    },
+                };
+                if should_render {
+                    ctx.notify();
+                }
+            }
+            ZmodemEvent::FileCompleted {
+                direction,
+                name,
+                path,
+            } => {
+                self.zmodem_transfer = ZmodemTransferViewState::Completed {
+                    direction: *direction,
+                    file_name: Some(name.clone()),
+                    path: path.clone(),
+                };
+                self.schedule_zmodem_transfer_hide(ctx);
+                ctx.notify();
+            }
+            ZmodemEvent::Completed { direction } => {
+                #[cfg(all(windows, feature = "local_tty"))]
+                self.finish_legacy_ssh_zmodem_upload_if_active();
+                let (file_name, path) = match &self.zmodem_transfer {
+                    ZmodemTransferViewState::Transferring {
+                        file_name, path, ..
+                    }
+                    | ZmodemTransferViewState::Completed {
+                        file_name, path, ..
+                    } => (file_name.clone(), path.clone()),
+                    ZmodemTransferViewState::Idle
+                    | ZmodemTransferViewState::AwaitingUpload
+                    | ZmodemTransferViewState::AwaitingDownloadDirectory
+                    | ZmodemTransferViewState::UploadStarting
+                    | ZmodemTransferViewState::Cancelled { .. }
+                    | ZmodemTransferViewState::Failed { .. } => (None, None),
+                };
+                self.zmodem_transfer = ZmodemTransferViewState::Completed {
+                    direction: *direction,
+                    file_name,
+                    path,
+                };
+                self.schedule_zmodem_transfer_hide(ctx);
+                ctx.notify();
+            }
+            ZmodemEvent::Cancelled { direction } => {
+                #[cfg(all(windows, feature = "local_tty"))]
+                self.finish_legacy_ssh_zmodem_upload_if_active();
+                self.zmodem_transfer = ZmodemTransferViewState::Cancelled {
+                    direction: *direction,
+                };
+                self.is_file_drop_target = false;
+                self.schedule_zmodem_transfer_hide(ctx);
+                ctx.notify();
+            }
+            ZmodemEvent::Failed { direction, message } => {
+                log::warn!("ZMODEM transfer failed: {message}");
+                #[cfg(all(windows, feature = "local_tty"))]
+                self.finish_legacy_ssh_zmodem_upload_if_active();
+                #[cfg(all(windows, feature = "local_tty"))]
+                {
+                    self.active_ssh_zmodem_generation = None;
+                }
+                self.advance_zmodem_transfer_generation();
+                self.zmodem_transfer = ZmodemTransferViewState::Failed {
+                    direction: *direction,
+                    message: message.clone(),
+                };
+                self.is_file_drop_target = false;
+                ctx.notify();
+            }
+        }
+    }
+
+    fn advance_zmodem_transfer_generation(&mut self) {
+        self.zmodem_transfer_generation = self.zmodem_transfer_generation.wrapping_add(1);
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn cancel_legacy_ssh_zmodem_upload(&mut self) {
+        if let Some(task) = self.legacy_ssh_zmodem_upload.take() {
+            let LegacySshZmodemUploadTask {
+                generation,
+                cancellation,
+                handle,
+            } = task;
+            if self.active_ssh_zmodem_generation == Some(generation) {
+                self.active_ssh_zmodem_generation = None;
+            }
+            cancellation.cancel();
+            drop(handle);
+        }
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn finish_legacy_ssh_zmodem_upload_if_active(&mut self) {
+        if let Some(task) = self.legacy_ssh_zmodem_upload.take() {
+            if self.active_ssh_zmodem_generation == Some(task.generation) {
+                self.active_ssh_zmodem_generation = None;
+            }
+        }
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn is_active_ssh_zmodem_generation(&self, generation: u64) -> bool {
+        self.active_ssh_zmodem_generation == Some(generation)
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn handle_ssh_zmodem_event(
+        &mut self,
+        generation: u64,
+        event: &ZmodemEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.is_active_ssh_zmodem_generation(generation) {
+            log::debug!("ignoring stale ZMODEM ssh side-channel event: {event:?}");
+            return;
+        }
+        self.handle_zmodem_event(event, ctx);
+    }
+
+    fn schedule_zmodem_transfer_hide(&mut self, ctx: &mut ViewContext<Self>) {
+        self.advance_zmodem_transfer_generation();
+        let generation = self.zmodem_transfer_generation;
+        ctx.spawn(
+            Timer::after(ZMODEM_TRANSFER_STATUS_HIDE_DELAY),
+            move |me, _, ctx| {
+                if me.zmodem_transfer_generation == generation
+                    && me.zmodem_transfer.should_auto_hide()
+                {
+                    me.zmodem_transfer = ZmodemTransferViewState::Idle;
+                    ctx.notify();
+                }
+            },
+        );
+    }
+
+    fn open_zmodem_upload_picker(&self, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        let view_id = self.view_id;
+        ctx.open_file_picker(
+            move |result, ctx| match result {
+                Ok(paths) if !paths.is_empty() => {
+                    let paths = paths.into_iter().map(PathBuf::from).collect();
+                    ctx.dispatch_typed_action_for_view(
+                        window_id,
+                        view_id,
+                        &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::upload(
+                            paths,
+                        )),
+                    );
+                }
+                Ok(_) => {
+                    dispatch_zmodem_picker_cancel(window_id, view_id, ZmodemDirection::Upload, ctx);
+                }
+                Err(err) => {
+                    if is_zmodem_file_picker_cancel_error(&err) {
+                        dispatch_zmodem_picker_cancel(
+                            window_id,
+                            view_id,
+                            ZmodemDirection::Upload,
+                            ctx,
+                        );
+                    } else {
+                        ctx.dispatch_typed_action_for_view(
+                            window_id,
+                            view_id,
+                            &TerminalAction::ZmodemFilePickerError {
+                                direction: ZmodemDirection::Upload,
+                                message: err.to_string(),
+                            },
+                        );
+                    }
+                }
+            },
+            FilePickerConfiguration::new().allow_multi_select(),
+        );
+    }
+
+    fn open_zmodem_download_directory_picker(&self, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        let view_id = self.view_id;
+        ctx.open_file_picker(
+            move |result, ctx| match result {
+                Ok(paths) => {
+                    let action = paths
+                        .into_iter()
+                        .next()
+                        .map(PathBuf::from)
+                        .map(ZmodemTransferPaths::download_directory)
+                        .unwrap_or_else(|| ZmodemTransferPaths::cancel(ZmodemDirection::Download));
+                    ctx.dispatch_typed_action_for_view(
+                        window_id,
+                        view_id,
+                        &TerminalAction::ZmodemTransferPathsSelected(action),
+                    );
+                }
+                Err(err) => {
+                    if is_zmodem_file_picker_cancel_error(&err) {
+                        dispatch_zmodem_picker_cancel(
+                            window_id,
+                            view_id,
+                            ZmodemDirection::Download,
+                            ctx,
+                        );
+                    } else {
+                        ctx.dispatch_typed_action_for_view(
+                            window_id,
+                            view_id,
+                            &TerminalAction::ZmodemFilePickerError {
+                                direction: ZmodemDirection::Download,
+                                message: err.to_string(),
+                            },
+                        );
+                    }
+                }
+            },
+            FilePickerConfiguration::new().folders_only(),
+        );
+    }
+
+    fn render_zmodem_transfer_panel(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let background = theme.background();
+        let text_color = theme.main_text_color(background);
+        let sub_text_color = theme.sub_text_color(background);
+        let title = self.zmodem_transfer_title();
+        let detail = self.zmodem_transfer_detail();
+
+        let mut title_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(self.render_zmodem_status_indicator(appearance))
+            .with_child(
+                Shrinkable::new(
+                    1.0,
+                    Clipped::new(
+                        Container::new(
+                            Text::new_inline(
+                                title,
+                                appearance.ui_font_family(),
+                                appearance.ui_font_size(),
+                            )
+                            .with_color(text_color.into())
+                            .finish(),
+                        )
+                        .with_padding_left(6.0)
+                        .finish(),
+                    )
+                    .finish(),
+                )
+                .finish(),
+            );
+
+        let dismiss_action = if let Some(cancel_direction) = self.zmodem_cancel_direction() {
+            Some(TerminalAction::CancelZmodemTransfer(cancel_direction))
+        } else if matches!(self.zmodem_transfer, ZmodemTransferViewState::Failed { .. }) {
+            Some(TerminalAction::DismissZmodemTransfer)
+        } else {
+            None
+        };
+
+        if let Some(action) = dismiss_action {
+            let icon_fill = theme.sub_text_color(background);
+            title_row.add_child(
+                Hoverable::new(MouseStateHandle::default(), move |_| {
+                    Container::new(
+                        ConstrainedBox::new(icons::Icon::X.to_warpui_icon(icon_fill).finish())
+                            .with_width(14.0)
+                            .with_height(14.0)
+                            .finish(),
+                    )
+                    .with_uniform_padding(6.0)
+                    .finish()
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_mouse_down(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(action.clone());
+                })
+                .finish(),
+            );
+        }
+
+        let detail_text = Text::new(detail, appearance.ui_font_family(), 11.0)
+            .with_line_height_ratio(1.25)
+            .with_color(sub_text_color.into())
+            .finish();
+
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(title_row.finish())
+            .with_child(Container::new(detail_text).with_padding_top(4.0).finish());
+
+        if let Some(progress) = self.zmodem_progress_fraction() {
+            column.add_child(
+                Container::new(render_zmodem_progress_bar(progress, appearance))
+                    .with_padding_top(6.0)
+                    .finish(),
+            );
+        }
+
+        ConstrainedBox::new(
+            Container::new(column.finish())
+                .with_background_color(background.into_solid())
+                .with_border(Border::all(1.0).with_border_fill(theme.outline()))
+                .with_uniform_padding(8.0)
+                .with_uniform_margin(4.0)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+                .finish(),
+        )
+        .with_width(
+            if matches!(self.zmodem_transfer, ZmodemTransferViewState::Failed { .. }) {
+                460.0
+            } else {
+                320.0
+            },
+        )
+        .finish()
+    }
+
+    fn render_zmodem_status_indicator(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let fill = match self.zmodem_transfer {
+            ZmodemTransferViewState::Completed { .. } => theme.ui_green_color().into(),
+            ZmodemTransferViewState::Failed { .. } => theme.ui_error_color().into(),
+            ZmodemTransferViewState::Idle
+            | ZmodemTransferViewState::AwaitingUpload
+            | ZmodemTransferViewState::AwaitingDownloadDirectory
+            | ZmodemTransferViewState::UploadStarting
+            | ZmodemTransferViewState::Transferring { .. }
+            | ZmodemTransferViewState::Cancelled { .. } => theme.accent(),
+        };
+
+        if matches!(
+            self.zmodem_transfer,
+            ZmodemTransferViewState::AwaitingUpload
+                | ZmodemTransferViewState::AwaitingDownloadDirectory
+                | ZmodemTransferViewState::UploadStarting
+                | ZmodemTransferViewState::Transferring { .. }
+        ) {
+            return BrailleSpinner::new(
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+                fill.into_solid(),
+                self.zmodem_spinner_handle.clone(),
+            )
+            .finish();
+        }
+
+        let icon = match self.zmodem_transfer {
+            ZmodemTransferViewState::Completed { .. } => icons::Icon::Check,
+            ZmodemTransferViewState::Failed { .. } => icons::Icon::AlertCircle,
+            ZmodemTransferViewState::Cancelled { .. } => icons::Icon::X,
+            ZmodemTransferViewState::Idle
+            | ZmodemTransferViewState::AwaitingUpload
+            | ZmodemTransferViewState::AwaitingDownloadDirectory
+            | ZmodemTransferViewState::UploadStarting
+            | ZmodemTransferViewState::Transferring { .. } => icons::Icon::Refresh,
+        };
+
+        ConstrainedBox::new(icon.to_warpui_icon(fill).finish())
+            .with_width(14.0)
+            .with_height(14.0)
+            .finish()
+    }
+
+    fn zmodem_transfer_title(&self) -> String {
+        match &self.zmodem_transfer {
+            ZmodemTransferViewState::Idle => String::new(),
+            ZmodemTransferViewState::AwaitingUpload => {
+                String::from("ZMODEM upload waiting for files")
+            }
+            ZmodemTransferViewState::AwaitingDownloadDirectory => {
+                String::from("ZMODEM download waiting for save location")
+            }
+            ZmodemTransferViewState::UploadStarting => String::from("ZMODEM upload starting"),
+            ZmodemTransferViewState::Transferring {
+                direction,
+                file_name,
+                ..
+            } => {
+                let verb = match direction {
+                    ZmodemDirection::Upload => "uploading",
+                    ZmodemDirection::Download => "downloading",
+                };
+                file_name
+                    .as_ref()
+                    .map(|name| format!("ZMODEM {verb} {name}"))
+                    .unwrap_or_else(|| format!("ZMODEM {verb}"))
+            }
+            ZmodemTransferViewState::Completed {
+                direction,
+                file_name,
+                ..
+            } => {
+                let verb = match direction {
+                    ZmodemDirection::Upload => "uploaded",
+                    ZmodemDirection::Download => "downloaded",
+                };
+                file_name
+                    .as_ref()
+                    .map(|name| format!("ZMODEM {verb} {name}"))
+                    .unwrap_or_else(|| format!("ZMODEM {verb}"))
+            }
+            ZmodemTransferViewState::Cancelled { direction } => {
+                let verb = match direction {
+                    ZmodemDirection::Upload => "upload",
+                    ZmodemDirection::Download => "download",
+                };
+                format!("ZMODEM {verb} cancelled")
+            }
+            ZmodemTransferViewState::Failed { .. } => String::from("ZMODEM transfer failed"),
+        }
+    }
+
+    fn zmodem_transfer_detail(&self) -> String {
+        zmodem_transfer_detail_for_state(&self.zmodem_transfer)
+    }
+
+    fn zmodem_progress_fraction(&self) -> Option<f32> {
+        match self.zmodem_transfer {
+            ZmodemTransferViewState::Transferring {
+                transferred,
+                total: Some(total),
+                ..
+            } if total > 0 => Some((transferred as f32 / total as f32).clamp(0.0, 1.0)),
+            ZmodemTransferViewState::Completed { .. } => Some(1.0),
+            ZmodemTransferViewState::Idle
+            | ZmodemTransferViewState::AwaitingUpload
+            | ZmodemTransferViewState::AwaitingDownloadDirectory
+            | ZmodemTransferViewState::UploadStarting
+            | ZmodemTransferViewState::Transferring { .. }
+            | ZmodemTransferViewState::Cancelled { .. }
+            | ZmodemTransferViewState::Failed { .. } => None,
+        }
+    }
+
+    fn zmodem_cancel_direction(&self) -> Option<ZmodemDirection> {
+        match self.zmodem_transfer {
+            ZmodemTransferViewState::AwaitingUpload => Some(ZmodemDirection::Upload),
+            ZmodemTransferViewState::AwaitingDownloadDirectory => Some(ZmodemDirection::Download),
+            ZmodemTransferViewState::UploadStarting => Some(ZmodemDirection::Upload),
+            ZmodemTransferViewState::Transferring { direction, .. } => Some(direction),
+            ZmodemTransferViewState::Idle
+            | ZmodemTransferViewState::Completed { .. }
+            | ZmodemTransferViewState::Cancelled { .. }
+            | ZmodemTransferViewState::Failed { .. } => None,
+        }
+    }
+
+    fn handle_zmodem_paths_selected(
+        &mut self,
+        paths: ZmodemTransferPaths,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(all(windows, feature = "local_tty"))]
+        if self.try_start_legacy_ssh_zmodem_upload(&paths, ctx, true) {
+            return;
+        }
+        #[cfg(all(windows, feature = "local_tty"))]
+        if self.try_start_direct_ssh_zmodem_download(&paths, ctx) {
+            return;
+        }
+
+        if paths.paths.is_empty() {
+            self.advance_zmodem_transfer_generation();
+            self.is_file_drop_target = false;
+            #[cfg(all(windows, feature = "local_tty"))]
+            {
+                self.cancel_legacy_ssh_zmodem_upload();
+                self.active_ssh_zmodem_generation = None;
+            }
+            self.zmodem_transfer = ZmodemTransferViewState::Cancelled {
+                direction: paths.direction,
+            };
+            self.schedule_zmodem_transfer_hide(ctx);
+            ctx.emit(Event::ZmodemTransferPaths(paths));
+            ctx.notify();
+            return;
+        }
+
+        match paths.direction {
+            ZmodemDirection::Upload => {
+                self.advance_zmodem_transfer_generation();
+                self.is_file_drop_target = false;
+                log::info!(
+                    "ZMODEM upload paths selected; sending {} path(s) to PTY event loop",
+                    paths.paths.len()
+                );
+                self.zmodem_transfer = ZmodemTransferViewState::UploadStarting;
+                ctx.emit(Event::ZmodemTransferPaths(paths));
+                ctx.notify();
+            }
+            ZmodemDirection::Download => {
+                self.advance_zmodem_transfer_generation();
+                self.is_file_drop_target = false;
+                log::info!(
+                    "ZMODEM download destination selected; sending {} path(s) to PTY event loop",
+                    paths.paths.len()
+                );
+                ctx.emit(Event::ZmodemTransferPaths(paths));
+                ctx.notify();
+            }
+        }
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn try_start_direct_ssh_zmodem_download(
+        &mut self,
+        paths: &ZmodemTransferPaths,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if paths.direction != ZmodemDirection::Download || paths.paths.is_empty() {
+            return false;
+        }
+
+        let candidate_session_ids = self.legacy_ssh_zmodem_candidate_session_ids(ctx);
+        let cwd = self.current_pwd();
+        let download_context = self
+            .direct_ssh_zmodem_context_from_active_command(&candidate_session_ids)
+            .or_else(|| {
+                direct_ssh_zmodem_upload_context(
+                    &candidate_session_ids,
+                    self.sessions.as_ref(ctx),
+                    cwd.clone(),
+                    &self.ssh_manager_zmodem_auth_by_session,
+                    self.pending_ssh_manager_zmodem_auth.as_ref(),
+                )
+            });
+        let Some(download_context) = download_context else {
+            log::info!(
+                "ZMODEM download destination selected, but no Windows SSH side-channel matched candidate session ids: {candidate_session_ids:?}"
+            );
+            return false;
+        };
+
+        let source = self.direct_ssh_zmodem_download_source(&download_context);
+        let has_ssh_manager_auth = download_context.ssh_manager_auth.is_some();
+        log::info!(
+            "ZMODEM download destination selected in Windows SSH session {:?}; using direct ssh side-channel; has_ssh_manager_auth={has_ssh_manager_auth}; source={source:?}",
+            download_context.session_id,
+        );
+
+        self.advance_zmodem_transfer_generation();
+        self.is_file_drop_target = false;
+        let now = Instant::now();
+        self.cancel_legacy_ssh_zmodem_upload();
+        let generation = self.zmodem_transfer_generation;
+        self.active_ssh_zmodem_generation = Some(generation);
+        self.zmodem_transfer = ZmodemTransferViewState::Transferring {
+            direction: ZmodemDirection::Download,
+            file_name: None,
+            path: paths.paths.first().cloned(),
+            transferred: 0,
+            total: None,
+            started_at: now,
+            last_rendered_at: now,
+        };
+        if matches!(
+            source,
+            crate::terminal::zmodem_ssh::DirectSshZmodemDownloadSource::Command { .. }
+        ) {
+            ctx.emit(Event::AbortZmodemSilently);
+        }
+
+        #[cfg(test)]
+        {
+            ctx.notify();
+        }
+
+        #[cfg(not(test))]
+        {
+            let auth = match download_context.ssh_manager_auth.as_ref() {
+                Some(auth_context) => {
+                    log::info!(
+                        "ZMODEM direct ssh download resolving SSH Manager auth: session_id={:?}, auth_type={:?}, secret_kind={:?}, secret_lookup_id={}",
+                        download_context.session_id,
+                        auth_context.auth_type,
+                        auth_context.secret_kind,
+                        auth_context.secret_lookup_id
+                    );
+                    self.direct_ssh_zmodem_auth_from_ssh_manager(auth_context)
+                }
+                None => {
+                    log::info!(
+                        "ZMODEM direct ssh download has no SSH Manager auth context: session_id={:?}, host={:?}",
+                        download_context.session_id,
+                        download_context.connection_info.host
+                    );
+                    Ok(None)
+                }
+            };
+            let auth = match auth {
+                Ok(auth) => auth,
+                Err(err) => {
+                    self.handle_zmodem_event(
+                        &ZmodemEvent::Failed {
+                            direction: Some(paths.direction),
+                            message: err.to_string(),
+                        },
+                        ctx,
+                    );
+                    return true;
+                }
+            };
+            log::info!(
+                "ZMODEM direct ssh download resolved auth mode: session_id={:?}, auth_mode={}",
+                download_context.session_id,
+                match &auth {
+                    Some(crate::terminal::zmodem_ssh::DirectSshZmodemAuth::Password(_)) =>
+                        "password",
+                    Some(crate::terminal::zmodem_ssh::DirectSshZmodemAuth::Passphrase(_)) =>
+                        "passphrase",
+                    None => "none",
+                }
+            );
+
+            let download = crate::terminal::zmodem_ssh::DirectSshZmodemDownload::new(
+                download_context.connection_info,
+                download_context.ssh_command,
+                auth,
+                source,
+                paths.clone(),
+                download_context.wsl_distro,
+            );
+            let download = match download {
+                Ok(download) => download,
+                Err(err) => {
+                    self.handle_zmodem_event(
+                        &ZmodemEvent::Failed {
+                            direction: Some(paths.direction),
+                            message: err.to_string(),
+                        },
+                        ctx,
+                    );
+                    return true;
+                }
+            };
+            let cancellation =
+                crate::terminal::zmodem_ssh::LegacySshZmodemUploadCancellation::default();
+            let cancellation_for_task = cancellation.clone();
+            let spawner = ctx.spawner();
+            let handle = ctx.spawn(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::terminal::zmodem_ssh::run_direct_ssh_zmodem_download(
+                            download,
+                            cancellation_for_task,
+                            |event| {
+                                let event_for_view = event.clone();
+                                let _ =
+                                    warpui::r#async::block_on(spawner.spawn(move |view, ctx| {
+                                        view.handle_ssh_zmodem_event(
+                                            generation,
+                                            &event_for_view,
+                                            ctx,
+                                        );
+                                    }));
+                            },
+                        )
+                    })
+                    .await
+                    .map_err(|err| err.to_string())
+                    .and_then(|result| result.map_err(|err| err.to_string()))
+                },
+                move |view, result, ctx| {
+                    if !view.is_active_ssh_zmodem_generation(generation) {
+                        return;
+                    }
+                    view.finish_legacy_ssh_zmodem_upload_if_active();
+                    if let Err(message) = result {
+                        view.handle_zmodem_event(
+                            &ZmodemEvent::Failed {
+                                direction: Some(ZmodemDirection::Download),
+                                message,
+                            },
+                            ctx,
+                        );
+                    }
+                },
+            );
+            self.legacy_ssh_zmodem_upload = Some(LegacySshZmodemUploadTask {
+                generation,
+                cancellation,
+                handle,
+            });
+        }
+        ctx.notify();
+        true
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn direct_ssh_zmodem_download_source(
+        &self,
+        context: &DirectSshZmodemUploadContext,
+    ) -> crate::terminal::zmodem_ssh::DirectSshZmodemDownloadSource {
+        let (active_session_id, command) = {
+            let model = self.model.lock();
+            let active_block = model.block_list().active_block();
+            (active_block.session_id(), active_block.command_to_string())
+        };
+        if active_session_id == context.session_id {
+            if let Some(argv) = parse_remote_sz_command(&command) {
+                return crate::terminal::zmodem_ssh::DirectSshZmodemDownloadSource::Command {
+                    cwd: context.cwd.clone(),
+                    argv,
+                };
+            }
+        }
+        crate::terminal::zmodem_ssh::DirectSshZmodemDownloadSource::DetectInteractiveSz
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn try_start_legacy_ssh_zmodem_upload(
+        &mut self,
+        paths: &ZmodemTransferPaths,
+        ctx: &mut ViewContext<Self>,
+        abort_interactive_receiver: bool,
+    ) -> bool {
+        if paths.direction != ZmodemDirection::Upload || paths.paths.is_empty() {
+            return false;
+        }
+
+        let candidate_session_ids = self.legacy_ssh_zmodem_candidate_session_ids(ctx);
+        let cwd = self.current_pwd();
+        let upload_context = self
+            .find_legacy_ssh_zmodem_upload_context(&candidate_session_ids, ctx)
+            .map(SshZmodemUploadContext::ControlMaster)
+            .or_else(|| {
+                let current_ssh_command_context = self
+                    .direct_ssh_zmodem_context_from_active_command(&candidate_session_ids)
+                    .map(SshZmodemUploadContext::Direct);
+                current_ssh_command_context.or_else(|| {
+                    direct_ssh_zmodem_upload_context(
+                        &candidate_session_ids,
+                        self.sessions.as_ref(ctx),
+                        cwd.clone(),
+                        &self.ssh_manager_zmodem_auth_by_session,
+                        self.pending_ssh_manager_zmodem_auth.as_ref(),
+                    )
+                    .map(SshZmodemUploadContext::Direct)
+                })
+            });
+        let Some(upload_context) = upload_context else {
+            log::info!(
+                "ZMODEM upload paths selected, but no Windows SSH side-channel matched candidate session ids: {candidate_session_ids:?}"
+            );
+            return false;
+        };
+        let (matched_session_id, side_channel) = match &upload_context {
+            SshZmodemUploadContext::ControlMaster(upload_context) => {
+                (Some(upload_context.session_id), "ControlMaster")
+            }
+            SshZmodemUploadContext::Direct(upload_context) => {
+                (upload_context.session_id, "direct ssh")
+            }
+        };
+        let has_ssh_manager_auth = matches!(
+            &upload_context,
+            SshZmodemUploadContext::Direct(DirectSshZmodemUploadContext {
+                ssh_manager_auth: Some(_),
+                ..
+            })
+        );
+
+        self.advance_zmodem_transfer_generation();
+        self.is_file_drop_target = false;
+        self.cancel_legacy_ssh_zmodem_upload();
+        let generation = self.zmodem_transfer_generation;
+        self.active_ssh_zmodem_generation = Some(generation);
+        self.zmodem_transfer = ZmodemTransferViewState::UploadStarting;
+        if abort_interactive_receiver
+            && matches!(
+            &upload_context,
+            SshZmodemUploadContext::Direct(DirectSshZmodemUploadContext {
+                detect_remote_rz_cwd: false,
+                ..
+            })
+        )
+        {
+            ctx.emit(Event::AbortZmodemSilently);
+        }
+        log::info!(
+            "ZMODEM upload paths selected in Windows SSH session {:?}; using {side_channel} side-channel; has_ssh_manager_auth={has_ssh_manager_auth}",
+            matched_session_id,
+        );
+
+        #[cfg(test)]
+        {
+            ctx.notify();
+        }
+
+        #[cfg(not(test))]
+        {
+            let upload = match upload_context {
+                SshZmodemUploadContext::ControlMaster(upload_context) => {
+                    crate::terminal::zmodem_ssh::LegacySshZmodemUpload::new(
+                        upload_context.socket_path,
+                        cwd.clone(),
+                        paths.clone(),
+                        upload_context.wsl_distro,
+                    )
+                    .map(crate::terminal::zmodem_ssh::SshZmodemUpload::ControlMaster)
+                }
+                SshZmodemUploadContext::Direct(upload_context) => {
+                    let auth = match upload_context.ssh_manager_auth.as_ref() {
+                        Some(auth_context) => {
+                            log::info!(
+                                "ZMODEM direct ssh upload resolving SSH Manager auth: session_id={:?}, auth_type={:?}, secret_kind={:?}, secret_lookup_id={}",
+                                upload_context.session_id,
+                                auth_context.auth_type,
+                                auth_context.secret_kind,
+                                auth_context.secret_lookup_id
+                            );
+                            self.direct_ssh_zmodem_auth_from_ssh_manager(auth_context)
+                        }
+                        None => {
+                            log::info!(
+                                "ZMODEM direct ssh upload has no SSH Manager auth context: session_id={:?}, host={:?}",
+                                upload_context.session_id,
+                                upload_context.connection_info.host
+                            );
+                            Ok(None)
+                        }
+                    };
+                    let auth = match auth {
+                        Ok(auth) => auth,
+                        Err(err) => {
+                            self.handle_zmodem_event(
+                                &ZmodemEvent::Failed {
+                                    direction: Some(paths.direction),
+                                    message: err.to_string(),
+                                },
+                                ctx,
+                            );
+                            return true;
+                        }
+                    };
+                    log::info!(
+                        "ZMODEM direct ssh upload resolved auth mode: session_id={:?}, auth_mode={}",
+                        upload_context.session_id,
+                        match &auth {
+                            Some(crate::terminal::zmodem_ssh::DirectSshZmodemAuth::Password(_)) =>
+                                "password",
+                            Some(crate::terminal::zmodem_ssh::DirectSshZmodemAuth::Passphrase(
+                                _,
+                            )) => "passphrase",
+                            None => "none",
+                        }
+                    );
+                    crate::terminal::zmodem_ssh::DirectSshZmodemUpload::new(
+                        upload_context.connection_info,
+                        upload_context.ssh_command,
+                        auth,
+                        upload_context.cwd,
+                        upload_context.detect_remote_rz_cwd,
+                        paths.clone(),
+                        upload_context.wsl_distro,
+                    )
+                    .map(crate::terminal::zmodem_ssh::SshZmodemUpload::Direct)
+                }
+            };
+            let upload = match upload {
+                Ok(upload) => upload,
+                Err(err) => {
+                    self.handle_zmodem_event(
+                        &ZmodemEvent::Failed {
+                            direction: Some(paths.direction),
+                            message: err.to_string(),
+                        },
+                        ctx,
+                    );
+                    return true;
+                }
+            };
+            let cancellation =
+                crate::terminal::zmodem_ssh::LegacySshZmodemUploadCancellation::default();
+            let cancellation_for_task = cancellation.clone();
+            let spawner = ctx.spawner();
+            let handle = ctx.spawn(
+                async move {
+                    tokio::task::spawn_blocking(move || {
+                        crate::terminal::zmodem_ssh::run_ssh_zmodem_upload(
+                            upload,
+                            cancellation_for_task,
+                            |event| {
+                                let event_for_view = event.clone();
+                                let _ =
+                                    warpui::r#async::block_on(spawner.spawn(move |view, ctx| {
+                                        view.handle_ssh_zmodem_event(
+                                            generation,
+                                            &event_for_view,
+                                            ctx,
+                                        );
+                                    }));
+                            },
+                        )
+                    })
+                    .await
+                    .map_err(|err| err.to_string())
+                    .and_then(|result| result.map_err(|err| err.to_string()))
+                },
+                move |view, result, ctx| {
+                    if !view.is_active_ssh_zmodem_generation(generation) {
+                        return;
+                    }
+                    view.finish_legacy_ssh_zmodem_upload_if_active();
+                    if let Err(message) = result {
+                        view.handle_zmodem_event(
+                            &ZmodemEvent::Failed {
+                                direction: Some(ZmodemDirection::Upload),
+                                message,
+                            },
+                            ctx,
+                        );
+                    }
+                },
+            );
+            self.legacy_ssh_zmodem_upload = Some(LegacySshZmodemUploadTask {
+                generation,
+                cancellation,
+                handle,
+            });
+        }
+        ctx.notify();
+        true
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn legacy_ssh_zmodem_candidate_session_ids<C: ModelAsRef>(&self, ctx: &C) -> Vec<SessionId> {
+        let mut candidate_session_ids = Vec::new();
+        for session_id in [
+            self.active_block_session_id(),
+            self.current_active_block_session_id(),
+            self.model_events_handle.as_ref(ctx).active_session_id(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !candidate_session_ids.contains(&session_id) {
+                candidate_session_ids.push(session_id);
+            }
+        }
+        candidate_session_ids
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn find_legacy_ssh_zmodem_upload_context<C: ModelAsRef + warpui::GetSingletonModelHandle>(
+        &self,
+        candidate_session_ids: &[SessionId],
+        ctx: &C,
+    ) -> Option<LegacySshZmodemUploadContext> {
+        let sessions = self.sessions.as_ref(ctx);
+        if let Some(context) =
+            legacy_ssh_zmodem_upload_context(candidate_session_ids, sessions, |_| None)
+        {
+            return Some(context);
+        }
+
+        if !FeatureFlag::SshRemoteServer.is_enabled() {
+            return None;
+        }
+
+        let remote_server_manager = RemoteServerManager::handle(ctx);
+        let remote_server_manager = remote_server_manager.as_ref(ctx);
+        legacy_ssh_zmodem_upload_context(candidate_session_ids, sessions, |session_id| {
+            remote_server_manager.control_path_for_session(session_id)
+        })
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn direct_ssh_zmodem_context_from_active_command(
+        &self,
+        candidate_session_ids: &[SessionId],
+    ) -> Option<DirectSshZmodemUploadContext> {
+        let (session_id, command) = {
+            let model = self.model.lock();
+            let active_block = model.block_list().active_block();
+            if !active_block.started() || active_block.finished() {
+                return None;
+            }
+            (active_block.session_id(), active_block.command_to_string())
+        };
+        let connection_info = parse_interactive_ssh_command(&command)?;
+        connection_info.host.as_ref()?;
+        let (auth_source_session_id, mut ssh_manager_auth) =
+            ssh_manager_auth_for_direct_ssh_command(
+                session_id,
+                candidate_session_ids,
+                &command,
+                &self.ssh_manager_zmodem_auth_by_session,
+                self.pending_ssh_manager_zmodem_auth.as_ref(),
+            );
+        if ssh_manager_auth.is_none() {
+            ssh_manager_auth =
+                self.find_ssh_manager_zmodem_auth_for_direct_connection(&connection_info, &command);
+        }
+        log::info!(
+            "ZMODEM direct ssh context matched active command: session_id={session_id:?}, auth_source_session_id={auth_source_session_id:?}, has_auth={}, host={:?}",
+            ssh_manager_auth.is_some(),
+            connection_info.host
+        );
+        Some(DirectSshZmodemUploadContext {
+            session_id,
+            connection_info,
+            ssh_command: Some(command),
+            ssh_manager_auth,
+            cwd: None,
+            detect_remote_rz_cwd: true,
+            wsl_distro: None,
+        })
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn find_ssh_manager_zmodem_auth_for_direct_connection(
+        &self,
+        connection_info: &InteractiveSshCommand,
+        ssh_command: &str,
+    ) -> Option<SshManagerZmodemAuthContext> {
+        #[cfg(test)]
+        {
+            let _ = self;
+            let _ = connection_info;
+            let _ = ssh_command;
+            return None;
+        }
+
+        #[cfg(not(test))]
+        {
+            let result = warp_ssh_manager::with_conn(|conn| {
+                let servers = warp_ssh_manager::SshRepository::list_nodes(conn)?
+                    .into_iter()
+                    .filter(|node| node.kind == warp_ssh_manager::NodeKind::Server)
+                    .filter_map(|node| {
+                        let server =
+                            warp_ssh_manager::SshRepository::get_server(conn, &node.id).ok()??;
+                        let resolved_auth =
+                            warp_ssh_manager::SshRepository::resolve_server_auth(conn, &server)
+                                .ok()?;
+                        Some((server, resolved_auth))
+                    })
+                    .collect::<Vec<_>>();
+                let auth_context = find_ssh_manager_zmodem_auth_context_from_servers(
+                    connection_info,
+                    ssh_command,
+                    servers.iter().cloned(),
+                );
+                if auth_context.is_none() {
+                    log_ssh_manager_zmodem_auth_fallback_diagnostics(connection_info, &servers);
+                }
+                Ok(auth_context)
+            });
+            match result {
+                Ok(Some(auth_context)) => {
+                    log::info!(
+                        "ZMODEM direct ssh matched SSH Manager server fallback: host={:?}, port={:?}, auth_type={:?}, secret_kind={:?}, secret_lookup_id={}",
+                        connection_info.host,
+                        connection_info.port,
+                        auth_context.auth_type,
+                        auth_context.secret_kind,
+                        auth_context.secret_lookup_id
+                    );
+                    Some(auth_context)
+                }
+                Ok(None) => {
+                    log::info!(
+                        "ZMODEM direct ssh SSH Manager server fallback found no unique match: host={:?}, port={:?}",
+                        connection_info.host,
+                        connection_info.port
+                    );
+                    None
+                }
+                Err(err) => {
+                    log::warn!(
+                        "ZMODEM direct ssh SSH Manager server fallback lookup failed: host={:?}, port={:?}, error={err}",
+                        connection_info.host,
+                        connection_info.port
+                    );
+                    None
+                }
+            }
+        }
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn direct_ssh_zmodem_auth_from_ssh_manager(
+        &self,
+        auth_context: &SshManagerZmodemAuthContext,
+    ) -> anyhow::Result<Option<crate::terminal::zmodem_ssh::DirectSshZmodemAuth>> {
+        use warp_ssh_manager::{AuthType, KeychainSecretStore, SecretKind, SshSecretStore};
+
+        match auth_context.auth_type {
+            AuthType::Password | AuthType::OneKey => {}
+            AuthType::Key if auth_context.secret_kind == SecretKind::Passphrase => {}
+            AuthType::Key => {
+                log::info!(
+                    "ZMODEM direct ssh auth skipped for key auth without passphrase: secret_kind={:?}, secret_lookup_id={}",
+                    auth_context.secret_kind,
+                    auth_context.secret_lookup_id
+                );
+                return Ok(None);
+            }
+        }
+
+        log::info!(
+            "ZMODEM direct ssh reading SSH Manager secret: auth_type={:?}, secret_kind={:?}, secret_lookup_id={}",
+            auth_context.auth_type,
+            auth_context.secret_kind,
+            auth_context.secret_lookup_id
+        );
+        let secret = KeychainSecretStore
+            .get(&auth_context.secret_lookup_id, auth_context.secret_kind)
+            .map_err(|err| {
+                anyhow::anyhow!("failed to read SSH Manager secret for ZMODEM upload: {err}")
+            })?;
+        let Some(secret) = secret else {
+            log::warn!(
+                "ZMODEM direct ssh SSH Manager secret missing: auth_type={:?}, secret_kind={:?}, secret_lookup_id={}",
+                auth_context.auth_type,
+                auth_context.secret_kind,
+                auth_context.secret_lookup_id
+            );
+            return match auth_context.auth_type {
+                AuthType::Password | AuthType::OneKey => Err(anyhow::anyhow!(
+                    "SSH Manager password not found for ZMODEM upload"
+                )),
+                AuthType::Key => Ok(None),
+            };
+        };
+        if secret.is_empty() {
+            log::warn!(
+                "ZMODEM direct ssh SSH Manager secret was empty: auth_type={:?}, secret_kind={:?}, secret_lookup_id={}",
+                auth_context.auth_type,
+                auth_context.secret_kind,
+                auth_context.secret_lookup_id
+            );
+            return Ok(None);
+        }
+        let auth = match auth_context.auth_type {
+            AuthType::Password | AuthType::OneKey => {
+                crate::terminal::zmodem_ssh::DirectSshZmodemAuth::Password(secret)
+            }
+            AuthType::Key => crate::terminal::zmodem_ssh::DirectSshZmodemAuth::Passphrase(secret),
+        };
+        log::info!(
+            "ZMODEM direct ssh SSH Manager secret loaded: auth_type={:?}, secret_kind={:?}, auth_mode={}",
+            auth_context.auth_type,
+            auth_context.secret_kind,
+            match &auth {
+                crate::terminal::zmodem_ssh::DirectSshZmodemAuth::Password(_) => "password",
+                crate::terminal::zmodem_ssh::DirectSshZmodemAuth::Passphrase(_) => "passphrase",
+            }
+        );
+        Ok(Some(auth))
+    }
+
+    fn handle_zmodem_file_picker_error(
+        &mut self,
+        direction: ZmodemDirection,
+        message: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        log::warn!("ZMODEM file picker failed: {message}");
+        self.advance_zmodem_transfer_generation();
+        self.zmodem_transfer = ZmodemTransferViewState::Failed {
+            direction: Some(direction),
+            message,
+        };
+        ctx.emit(Event::ZmodemTransferPaths(ZmodemTransferPaths::cancel(
+            direction,
+        )));
+        ctx.notify();
     }
 
     /// Creates and inserts the install-failed banner as rich content.
@@ -11488,6 +13285,36 @@ impl TerminalView {
         if let Some(subshell_info) = session.subshell_info() {
             self.warpify_state
                 .add_subshell_separator(subshell_info, self.model.clone(), ctx);
+        }
+
+        #[cfg(all(windows, feature = "local_tty"))]
+        if session.subshell_info().is_some() {
+            log::info!(
+                "ZMODEM SSH Manager auth bootstrap check: session_id={session_id:?}, spawning_command={}, pending_present={}",
+                bootstrap_event.spawning_command,
+                self.pending_ssh_manager_zmodem_auth.is_some()
+            );
+            let should_bind_auth =
+                self.pending_ssh_manager_zmodem_auth
+                    .as_ref()
+                    .is_some_and(|auth_context| {
+                        auth_context.ssh_command == bootstrap_event.spawning_command
+                    });
+            log::info!(
+                "ZMODEM SSH Manager auth bootstrap match: session_id={session_id:?}, should_bind_auth={should_bind_auth}"
+            );
+            if should_bind_auth {
+                if let Some(auth_context) = self.pending_ssh_manager_zmodem_auth.take() {
+                    log::info!(
+                        "ZMODEM SSH Manager auth bound to session: session_id={session_id:?}, auth_type={:?}, secret_kind={:?}, secret_lookup_id={}",
+                        auth_context.auth_type,
+                        auth_context.secret_kind,
+                        auth_context.secret_lookup_id
+                    );
+                    self.ssh_manager_zmodem_auth_by_session
+                        .insert(session_id, auth_context);
+                }
+            }
         }
 
         self.is_login_shell_bootstrapped = true;
@@ -12068,11 +13895,7 @@ impl TerminalView {
             .editor()
             .as_ref(ctx)
             .selected_text(ctx);
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        if text.is_empty() { None } else { Some(text) }
     }
 }
 
@@ -12088,7 +13911,7 @@ fn build_onboarding_keybindings(ctx: &AppContext) -> OnboardingKeybindings {
         .set_input_mode_agent_keybinding()
         .unwrap_or_else(|| {
             if OperatingSystem::get().is_mac() {
-                "⌘-I".to_string()
+                "Cmd-I".to_string()
             } else {
                 "Ctrl-I".to_string()
             }
@@ -12101,7 +13924,7 @@ fn build_onboarding_keybindings(ctx: &AppContext) -> OnboardingKeybindings {
         Keystroke::parse("ctrl-shift-enter")
     }
     .map(|k| k.displayed())
-    .unwrap_or_else(|_| "⌘-⏎".to_string());
+    .unwrap_or_else(|_| "Ctrl-Enter".to_string());
 
     OnboardingKeybindings {
         toggle_input_mode,
@@ -12117,7 +13940,7 @@ fn fork_label_for_query(query: &str) -> String {
         let first_line = query.lines().next().unwrap_or(query).trim();
         let chars: Vec<char> = first_line.chars().take(21).collect();
         let (truncated, suffix) = if chars.len() > 20 {
-            (chars[..20].iter().collect::<String>(), "…")
+            (chars[..20].iter().collect::<String>(), "...")
         } else {
             (chars.iter().collect::<String>(), "")
         };
@@ -12140,7 +13963,7 @@ impl TerminalView {
 
         // The MeetTerminalInput step expects terminal mode. If the default
         // session mode is Agent (e.g. from cloud-synced settings), the tab
-        // may already be in agent view — exit it first.
+        // may already be in agent view 閳?exit it first.
         self.exit_agent_view(ctx);
 
         // Remove the terminal zero-state welcome block so it doesn't appear
@@ -12307,9 +14130,11 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .nld_in_terminal_enabled_internal
-                .set_value(enable, ctx));
+            report_if_error!(
+                settings
+                    .nld_in_terminal_enabled_internal
+                    .set_value(enable, ctx)
+            );
         });
     }
 
@@ -12584,8 +14409,6 @@ impl TerminalView {
 
     fn clear_prompt_suggestions(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(banner) = self.inline_banners_state.prompt_suggestions_banner.take() {
-            // Zap BYOP:若该 chip 来自 suggest_prompt 工具,需要 cancel 掉
-            // 对应 oneshot channel,否则 BYOP loop 永挂等 result。
             self.complete_byop_suggest_prompt_if_needed(&banner, None, ctx);
             self.input.update(ctx, |input, ctx| {
                 input.set_prompt_suggestions_banner_state(None, ctx);
@@ -12599,8 +14422,6 @@ impl TerminalView {
         };
     }
 
-    /// 如果 banner 携带 BYOP `byop_action_id`,调 `complete_suggest_prompt_action`
-    /// 关闭 oneshot channel。`accepted_query=Some` 时回 Accepted,否则回 Cancelled。
     fn complete_byop_suggest_prompt_if_needed(
         &self,
         banner: &PromptSuggestionBannerState,
@@ -12754,18 +14575,14 @@ impl TerminalView {
         self.update_scroll_position_locking(ScrollPositionUpdate::AfterEnd, ctx);
     }
 
-    /// Zap BYOP:模型主动调 `suggest_prompt` 工具时,executor emit 此事件携带
-    /// prompt + label + action_id。
+    /// Zap BYOP:濡€崇€锋稉璇插З鐠?`suggest_prompt` 瀹搞儱鍙块弮?executor emit 濮濄倓绨ㄦ禒鑸垫儭鐢?    /// prompt + label + action_id閵?    ///
+    /// **鐠佹崘顓哥拠顓濈疅**:`suggest_prompt` 閺?fire-and-forget(鐎靛綊缍?opencode agentic 瀹搞儱鍙跨悰灞艰礋)
+    /// 閳ユ柡鈧?chip 娑撯偓閺勫墽銇氱亸?*缁斿宓?* complete oneshot(娴?Accepted{query: prompt} 閸犲倸娲栧Ο鈥崇€?,
+    /// 娑撳秶鐡戦悽銊﹀煕閻愮懓鍤妴鍌濈箹閺?
+    /// 1. conversation 閻樿埖鈧焦鐖?"Warping..." 缁斿宓嗗☉鍫濄亼,濡€崇€锋稉瀣╃鏉烆喛鍤滈悞?end_turn 閺€璺虹啲
+    /// 2. chip 娴犲秴婀?UI 娑撳﹥瀵曢惈鈧?閻劍鍩涢悙鐟板毊 閳?鐠?`resolve_prompt_suggestion` 閳?    ///    `enter_agent_view(Some(prompt))`,閹?prompt 瑜?*閺傞绔存潪?user input** 閹绘劒姘?
+    ///    鐠虹喓鏁ら幋閿嬪閸斻劑鏁崗銉╁亝濞?prompt 缁涘鐜?閻欘剛鐝涙禍?oneshot channel)
     ///
-    /// **设计语义**:`suggest_prompt` 是 fire-and-forget(对齐 opencode agentic 工具行为)
-    /// —— chip 一显示就**立即** complete oneshot(以 Accepted{query: prompt} 喂回模型),
-    /// 不等用户点击。这样:
-    /// 1. conversation 状态栏 "Warping..." 立即消失,模型下一轮自然 end_turn 收尾
-    /// 2. chip 仍在 UI 上挂着,用户点击 → 走 `resolve_prompt_suggestion` →
-    ///    `enter_agent_view(Some(prompt))`,把 prompt 当**新一轮 user input** 提交,
-    ///    跟用户手动键入那段 prompt 等价(独立于 oneshot channel)
-    ///
-    /// 之前误把"用户点 chip"当 oneshot 完成信号,导致用户不点 → conversation 永挂。
     fn handle_suggest_prompt_executor_event(
         &mut self,
         _: ModelHandle<PromptSuggestionExecutor>,
@@ -12782,23 +14599,19 @@ impl TerminalView {
                 self.on_maa_prompt_suggestion_generated(
                     prompt,
                     label,
-                    0,    // request_duration_ms — BYOP 本地工具,无服务端往返耗时
-                    None, // trigger — 不来自 shell command 等被动触发器
+                    0, // request_duration_ms 閳?BYOP 閺堫剙婀村銉ュ徔,閺冪姵婀囬崝锛勵伂瀵扳偓鏉╂棁鈧妞?
+                    None, // trigger 閳?娑撳秵娼甸懛?shell command 缁涘顫﹂崝銊ㄐ曢崣鎴濇珤
                     Some(*conversation_id),
-                    None, // server_request_token — 非 server 触发
+                    None, // server_request_token 閳?闂?server 鐟欙箑褰?
                     ctx,
                 );
-                // 立即 complete oneshot 关 channel,但**必须用 Cancelled** —— 否则
+                // 缁斿宓?complete oneshot 閸?channel,娴?*韫囧懘銆忛悽?Cancelled** 閳ユ柡鈧?閸氾箑鍨?
                 // controller (`controller.rs:472` `should_trigger_request_upon_completion`)
-                // 检测 Accepted/非 Cancelled result 会强制触发新一轮 BYOP LLM call,
-                // 模型看到"用户接受了 chip"+ 没有新 user message,返回空响应,
-                // UX 卡在 "Warping..." 又一次。Cancelled 让 controller 不触发 follow-up
-                // request,当前轮自然结束。
-                //
-                // 用户点 chip 是另一条路径:`resolve_prompt_suggestion` →
-                // `enter_agent_view(Some(prompt))` 把 prompt 作为新 user query 发送
-                // (跟 mastra `append({role:'user', content: prompt})` 等价),触发
-                // 全新一轮对话,跟本 oneshot channel 无关。
+                // 濡偓濞?Accepted/闂?Cancelled result 娴兼艾宸遍崚鎯靶曢崣鎴炴煀娑撯偓鏉?BYOP LLM call,
+                // 濡€崇€烽惇瀣煂"閻劍鍩涢幒銉ュ綀娴?chip"+ 濞屸剝婀侀弬?user message,鏉╂柨娲栫粚鍝勬惙鎼?
+                // UX 閸椻€虫躬 "Warping..." 閸欏牅绔村▎掳鈧景ancelled 鐠?controller 娑撳秷袝閸?follow-up
+                // request,瑜版挸澧犳潪顔垮殰閻掑墎绮ㄩ弶鐔粹偓?                //
+                // 閻劍鍩涢悙?chip 閺勵垰褰熸稉鈧弶陇鐭惧?`resolve_prompt_suggestion` 閳?                // `enter_agent_view(Some(prompt))` 閹?prompt 娴ｆ粈璐熼弬?user query 閸欐垿鈧?                // (鐠?mastra `append({role:'user', content: prompt})` 缁涘鐜?,鐟欙箑褰?
                 let executor = self
                     .ai_action_model
                     .as_ref(ctx)
@@ -13503,6 +15316,25 @@ impl TerminalView {
         self.execute_pending_command((), ctx);
     }
 
+    #[cfg(all(windows, feature = "local_tty"))]
+    pub fn set_pending_ssh_manager_zmodem_auth(
+        &mut self,
+        ssh_command: String,
+        secret_lookup_id: String,
+        secret_kind: warp_ssh_manager::SecretKind,
+        auth_type: warp_ssh_manager::AuthType,
+    ) {
+        log::info!(
+            "ZMODEM SSH Manager auth pending registered: auth_type={auth_type:?}, secret_kind={secret_kind:?}, secret_lookup_id={secret_lookup_id}, ssh_command={ssh_command}"
+        );
+        self.pending_ssh_manager_zmodem_auth = Some(SshManagerZmodemAuthContext {
+            ssh_command,
+            secret_lookup_id,
+            secret_kind,
+            auth_type,
+        });
+    }
+
     fn hide_slow_bootstrap_banner(&mut self, ctx: &mut ViewContext<Self>) {
         if self.is_slow_bootstrap_banner_open {
             self.is_slow_bootstrap_banner_open = false;
@@ -13726,7 +15558,7 @@ impl TerminalView {
     }
 
     /// If we're a viewer eligible for viewer-driven sizing, report our natural
-    /// terminal size to the sharer — but only when the resize was NOT caused by
+    /// terminal size to the sharer 閳?but only when the resize was NOT caused by
     /// the sharer (which would create a loop).
     fn maybe_report_viewer_terminal_size(
         &mut self,
@@ -14114,11 +15946,13 @@ impl TerminalView {
                             Some(model.link_at_range(url, RespectObfuscatedSecrets::Yes));
                         url_content
                             .map(|url_content| {
-                                vec![MenuItemFields::new(crate::t!("menu-block-copy-url"))
-                                    .with_on_select_action(TerminalAction::ContextMenu(
-                                        ContextMenuAction::CopyUrl { url_content },
-                                    ))
-                                    .into_item()]
+                                vec![
+                                    MenuItemFields::new(crate::t!("menu-block-copy-url"))
+                                        .with_on_select_action(TerminalAction::ContextMenu(
+                                            ContextMenuAction::CopyUrl { url_content },
+                                        ))
+                                        .into_item(),
+                                ]
                             })
                             .unwrap_or_default()
                     }
@@ -14206,7 +16040,7 @@ impl TerminalView {
                                 AskAISource::SelectedBlockOrText
                             }),
                         ))
-                        .with_key_shortcut_label(Some("⌃ ⇧ Space"))
+                        .with_key_shortcut_label(Some("閳?閳?Space"))
                         .into_item(),
                     ]);
                 }
@@ -14273,7 +16107,7 @@ impl TerminalView {
                 let is_copy_both_disabled =
                     is_copy_commands_disabled && tail_block.output_to_string().trim().is_empty();
 
-                // Zap:删除 "Share block..." / "Share session..." 入口(云端依赖)
+                // Zap:閸掔娀娅?"Share block..." / "Share session..." 閸忋儱褰?娴滄垹顏笟婵婄)
                 let _ = is_share_disabled;
 
                 let mut items = vec![
@@ -14400,28 +16234,30 @@ impl TerminalView {
                         ))
                         .into_item(),
                 ]);
-                items.append(&mut vec![MenuItemFields::new(crate::t!(
-                    "menu-block-toggle-block-filter"
-                ))
-                .with_on_select_action(TerminalAction::ToggleBlockFilterOnSelectedOrLastBlock(
-                    ToggleBlockFilterSource::ContextMenu,
-                ))
-                .with_key_shortcut_label(keybinding_name_to_display_string(
-                    TOGGLE_BLOCK_FILTER_KEYBINDING,
-                    ctx,
-                ))
-                .into_item()]);
-                items.append(&mut vec![MenuItemFields::new(crate::t!(
-                    "menu-block-toggle-bookmark"
-                ))
-                .with_on_select_action(TerminalAction::ContextMenu(
-                    ContextMenuAction::ToggleBookmark,
-                ))
-                .with_key_shortcut_label(keybinding_name_to_display_string(
-                    "terminal:bookmark_selected_block",
-                    ctx,
-                ))
-                .into_item()]);
+                items.append(&mut vec![
+                    MenuItemFields::new(crate::t!("menu-block-toggle-block-filter"))
+                        .with_on_select_action(
+                            TerminalAction::ToggleBlockFilterOnSelectedOrLastBlock(
+                                ToggleBlockFilterSource::ContextMenu,
+                            ),
+                        )
+                        .with_key_shortcut_label(keybinding_name_to_display_string(
+                            TOGGLE_BLOCK_FILTER_KEYBINDING,
+                            ctx,
+                        ))
+                        .into_item(),
+                ]);
+                items.append(&mut vec![
+                    MenuItemFields::new(crate::t!("menu-block-toggle-bookmark"))
+                        .with_on_select_action(TerminalAction::ContextMenu(
+                            ContextMenuAction::ToggleBookmark,
+                        ))
+                        .with_key_shortcut_label(keybinding_name_to_display_string(
+                            "terminal:bookmark_selected_block",
+                            ctx,
+                        ))
+                        .into_item(),
+                ]);
 
                 items.append(&mut vec![
                     MenuItem::Separator,
@@ -14435,15 +16271,17 @@ impl TerminalView {
                         ))
                         .into_item(),
                 ]);
-                items.append(&mut vec![MenuItemFields::new(scroll_to_bottom_str)
-                    .with_on_select_action(TerminalAction::ContextMenu(
-                        ContextMenuAction::ScrollToBottomOfBlock,
-                    ))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "terminal:scroll_to_bottom_of_selected_block",
-                        ctx,
-                    ))
-                    .into_item()]);
+                items.append(&mut vec![
+                    MenuItemFields::new(scroll_to_bottom_str)
+                        .with_on_select_action(TerminalAction::ContextMenu(
+                            ContextMenuAction::ScrollToBottomOfBlock,
+                        ))
+                        .with_key_shortcut_label(keybinding_name_to_display_string(
+                            "terminal:scroll_to_bottom_of_selected_block",
+                            ctx,
+                        ))
+                        .into_item(),
+                ]);
 
                 items
             }
@@ -14455,7 +16293,7 @@ impl TerminalView {
             ) => {
                 // If selection is empty, only show non-block related options
                 let items: Vec<MenuItem<TerminalAction>> = Vec::new();
-                // Zap:删除 session_sharing_context_menu_items(云端 shared session 入口)
+                // Zap:閸掔娀娅?session_sharing_context_menu_items(娴滄垹顏?shared session 閸忋儱褰?
                 items
             }
             _ => vec![],
@@ -14569,12 +16407,14 @@ impl TerminalView {
         is_rprompt_shown: bool,
         position: PromptPosition,
     ) -> Vec<MenuItem<TerminalAction>> {
-        let mut items = vec![MenuItemFields::new(crate::t!("menu-block-copy-prompt"))
-            .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::CopyPrompt {
-                position,
-                part: PromptPart::EntirePrompt,
-            }))
-            .into_item()];
+        let mut items = vec![
+            MenuItemFields::new(crate::t!("menu-block-copy-prompt"))
+                .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::CopyPrompt {
+                    position,
+                    part: PromptPart::EntirePrompt,
+                }))
+                .into_item(),
+        ];
 
         if is_rprompt_shown {
             items.push(
@@ -14850,7 +16690,7 @@ impl TerminalView {
                 .into_item(),
         );
 
-        // Zap:删除 session_sharing_context_menu_items(云端 shared session 入口)
+        // Zap:閸掔娀娅?session_sharing_context_menu_items(娴滄垹顏?shared session 閸忋儱褰?
 
         // Section 2: AI Command Search, Ask Zap AI
         items.extend([
@@ -15064,7 +16904,7 @@ impl TerminalView {
                     .with_on_select_action(TerminalAction::ContextMenu(
                         ContextMenuAction::CopySelectedText,
                     ))
-                    .with_key_shortcut_label(Some("⌘-C"))
+                    .with_key_shortcut_label(Some("閳?C"))
                     .into_item(),
             );
             if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
@@ -15078,13 +16918,13 @@ impl TerminalView {
                     .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::AskAI(
                         AskAISource::SelectedTerminalText,
                     )))
-                    .with_key_shortcut_label(Some("⌃-⇧-Space"))
+                    .with_key_shortcut_label(Some("閳?閳?Space"))
                     .into_item(),
                 ]);
             }
         }
 
-        // Zap:删除 session_sharing_context_menu_items(云端 shared session 入口)
+        // Zap:閸掔娀娅?session_sharing_context_menu_items(娴滄垹顏?shared session 閸忋儱褰?
         let current_shell = model.shell_launch_state().available_shell();
         let mut pane_context_menu_items = self.pane_context_menu_items(current_shell, ctx);
         if !menu_items.is_empty() && !pane_context_menu_items.is_empty() {
@@ -15456,7 +17296,9 @@ impl TerminalView {
         ctx.update_view(&self.context_menu, |context_menu, view_ctx| {
             context_menu.set_origin(menu_state.menu_type.origin());
             let width = match menu_state.menu_type {
-                ContextMenuType::OneKeyPrompt | ContextMenuType::SuRootPasswordConfirm => ONEKEY_CONTEXT_MENU_WIDTH,
+                ContextMenuType::OneKeyPrompt | ContextMenuType::SuRootPasswordConfirm => {
+                    ONEKEY_CONTEXT_MENU_WIDTH
+                }
                 ContextMenuType::BlockList { .. }
                 | ContextMenuType::AltScreen { .. }
                 | ContextMenuType::Prompt { .. }
@@ -15501,11 +17343,8 @@ impl TerminalView {
             return;
         }
 
-        // 抢占 throttle 窗口,防止 stream 紧接着第二次 yield 时又起一个 spawn。
         self.onekey_last_prompt_at = Some(Instant::now());
 
-        // Keychain + SQLite 都是同步阻塞 API,不能在 UI 线程跑。
-        // 走 spawn_blocking,完成后回到主线程展示菜单。
         let future = async move {
             tokio::task::spawn_blocking(load_saved_ssh_credentials)
                 .await
@@ -15522,7 +17361,6 @@ impl TerminalView {
             if credentials.is_empty() {
                 return;
             }
-            // 二次确认:加载途中可能用户已经手动打开菜单或 injector 起飞了。
             if view.context_menu_state.is_some() || view.ssh_secret_auto_injection_in_flight {
                 return;
             }
@@ -15537,7 +17375,6 @@ impl TerminalView {
                 })
                 .collect();
             view.onekey_query.clear();
-            // 复用常驻 editor:清空内容、把焦点稍后转过来。
             view.onekey_search_editor
                 .clone()
                 .update(ctx, |editor, ctx| {
@@ -15545,9 +17382,6 @@ impl TerminalView {
                 });
 
             let items = view.build_onekey_menu_items();
-            // 候选可能很多(用户保存了几十/几百台 SSH 服务器),按数量推导
-            // 一个有限高度,并切到 Scrollable,这样方向键导航会自动 scroll-into-view,
-            // 也不会把终端主体盖住。搜索框(pinned header)单独算 ~32px。
             let candidate_count = view.onekey_prompt_candidates.len() as f32;
             let target_height = (ONEKEY_SEARCH_HEADER_HEIGHT
                 + candidate_count * ONEKEY_MENU_ROW_HEIGHT)
@@ -15556,9 +17390,6 @@ impl TerminalView {
             ctx.update_view(&view.context_menu, |context_menu, _| {
                 context_menu.set_menu_variant(MenuVariant::scrollable());
                 context_menu.set_height(target_height);
-                // 搜索框走 pinned header,不占用 selection 索引,也不会被滚动。
-                // 闭包是 Fn,只捕获 ViewHandle clone,不依赖 query —— query 变化
-                // 走 set_items 重建候选行,不重建 header。
                 context_menu.set_pinned_header_builder(move |app| {
                     render_onekey_search_header(&search_editor, app)
                 });
@@ -15571,24 +17402,13 @@ impl TerminalView {
                 items,
                 ctx,
             );
-            // 把焦点放到搜索框,这样用户能直接打字过滤候选;
-            // Up/Down/Enter/Escape/Ctrl+N/Ctrl+P 通过 editor 的导航键
-            // propagate 机制转成 EditorEvent 触发对应的菜单操作。
             ctx.focus(&view.onekey_search_editor);
-            // 默认选中第一条候选(items[0]),保持原 select_next 语义健壮性:
-            // 如果将来在候选前插入 separator 等非 selectable 项,仍能正确跳过。
             ctx.update_view(&view.context_menu, |context_menu, ctx| {
                 context_menu.select_next(ctx);
             });
         });
     }
 
-    /// 创建 OneKey 菜单顶部的搜索输入框,与 TerminalView 同生命周期。
-    /// 订阅 Edited 触发实时过滤,Up/Down/Enter/Escape 通过 editor 的
-    /// 导航键 propagate 机制转给菜单。Ctrl+N/Ctrl+P 在 EditorView 全局
-    /// 被映射为 EditorAction::Down/Up(见 app/src/editor/view/mod.rs:633,640),
-    /// 因此 single-line + Always 自动 emit Navigate(NavigationKey::Up/Down),
-    /// 无需额外 keymap。
     fn build_onekey_search_editor(ctx: &mut ViewContext<Self>) -> ViewHandle<EditorView> {
         let editor = ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::as_ref(ctx);
@@ -15599,9 +17419,6 @@ impl TerminalView {
                     clear_selections_on_blur: true,
                     propagate_and_no_op_vertical_navigation_keys:
                         PropagateAndNoOpNavigationKeys::Always,
-                    // 让 escape 先 propagate 到 TerminalView 关闭菜单,
-                    // 与 ModelSelector(model_selector.rs:96)对齐——这样
-                    // 即便 vim 模式有 pending 操作,也优先关闭菜单。
                     propagate_and_no_op_escape_key: PropagateAndNoOpEscapeKey::PropagateFirst,
                     ..Default::default()
                 },
@@ -15622,8 +17439,6 @@ impl TerminalView {
         event: &EditorEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        // 只有当 OneKey 菜单仍然处于打开状态时,这些事件才有意义;
-        // 否则可能是 editor 已被替换/销毁过程中迟到的事件。
         if !matches!(
             self.context_menu_state.map(|state| state.menu_type),
             Some(ContextMenuType::OneKeyPrompt)
@@ -15657,33 +17472,21 @@ impl TerminalView {
                 }
             }
             EditorEvent::Escape => {
-                // Menu 框架本身也注册了 escape→Close 的 keybinding。如果
-                // EditorView 没有 stop_propagation,close_context_menu 可能
-                // 被调用两次,但 self.context_menu_state.take() 是幂等的,
-                // 第二次进来 state 已经 None,不会重复清理。
                 self.close_context_menu(ctx, true);
             }
             _ => {}
         }
     }
 
-    /// 按当前 query 用 fuzzy_match 过滤 & 排序候选,重建菜单 items 列表。
-    /// 搜索框走 pinned header,不在 items 列表里;items 第 0 项就是
-    /// 命中的第一条候选(或空态 disabled 行)。
     fn refresh_onekey_menu_items(&mut self, ctx: &mut ViewContext<Self>) {
         let items = self.build_onekey_menu_items();
         ctx.update_view(&self.context_menu, |context_menu, ctx| {
             context_menu.set_items(items, ctx);
-            // set_items 会 reset_selection;query 变化后默认选中第一条
-            // selectable 候选,方便用户直接回车填充。
-            context_menu.select_next(ctx);
+            // set_items 娴?reset_selection;query 閸欐ê瀵查崥搴ㄧ帛鐠併倝鈧鑵戠粭顑跨閺?            // selectable 閸婃瑩鈧?閺傞€涚┒閻劍鍩涢惄瀛樺复閸ョ偠婧呮繅顐㈠帠閵?            context_menu.select_next(ctx);
         });
         ctx.notify();
     }
 
-    /// 构建 OneKey 菜单的 items:按当前 query 过滤排序后的候选行,
-    /// 每行的 on_select_action 携带其在全集 `onekey_prompt_candidates`
-    /// 中的索引。搜索框走 `set_pinned_header_builder`,不在 items 列表中。
     fn build_onekey_menu_items(&self) -> Vec<MenuItem<TerminalAction>> {
         let order = filter_and_sort_onekey_candidates(
             self.onekey_prompt_candidates
@@ -15692,8 +17495,6 @@ impl TerminalView {
             &self.onekey_query,
         );
         match order {
-            // 命中为空:加一条 disabled 提示行,避免菜单只剩搜索框
-            // 显得很怪;disabled 会被 select_next/previous 自动跳过。
             OnekeyMenuRows::NoMatches => {
                 vec![
                     MenuItemFields::new(crate::t!("terminal-onekey-search-no-results"))
@@ -15722,9 +17523,7 @@ impl TerminalView {
             self.close_context_menu(ctx, true);
             return;
         };
-        // 用 Zeroizing<Vec<u8>> 持有本函数内的明文副本,函数返回时自动清零;
-        // write_to_pty 收到的是另一份 Cow,那一份在事件系统/PTY 路径上无法
-        // zeroize(属于既有架构限制),但至少把本帧栈上的明文窗口缩到最小。
+        // 閻?Zeroizing<Vec<u8>> 閹镐焦婀侀張顒€鍤遍弫鏉垮敶閻ㄥ嫭妲戦弬鍥у閺?閸戣姤鏆熸潻鏂挎礀閺冩儼鍤滈崝銊︾闂?
         let mut bytes: zeroize::Zeroizing<Vec<u8>> =
             zeroize::Zeroizing::new(candidate.secret.as_bytes().to_vec());
         bytes.push(b'\n');
@@ -15742,12 +17541,10 @@ impl TerminalView {
         }
     }
 
-    /// 仅由 `secret_injector` 在起飞/结束时调用。详见字段文档。
     pub(crate) fn set_ssh_secret_auto_injection_in_flight(&mut self, in_flight: bool) {
         self.ssh_secret_auto_injection_in_flight = in_flight;
     }
 
-    /// 检测到 su root 密码提示后弹出确认菜单。
     pub(crate) fn show_su_root_confirm_menu(&mut self, ctx: &mut ViewContext<Self>) {
         if self.context_menu_state.is_some() {
             return;
@@ -15861,7 +17658,6 @@ impl TerminalView {
         items
     }
 
-    /// 用户确认后注入暂存的 root 密码。
     fn fill_su_root_password(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(password) = self.su_root_password.take() {
             self.fill_su_password(&password, ctx);
@@ -16375,10 +18171,8 @@ impl TerminalView {
         }
     }
 
-    /// Zap:若当前活动 block 所属会话是 remote-server 会话,返回其 `HostId`。
-    ///
-    /// 用于在终端里 Ctrl/Cmd+点击文件路径时,判断应当走本地还是远端 buffer-sync
-    /// 打开流程。非 remote-server 会话返回 `None`(保持本地行为不变)。
+    /// Zap:閼汇儱缍嬮崜宥嗘た閸?block 閹碘偓鐏炵偘绱扮拠婵囨Ц remote-server 娴兼俺鐦?鏉╂柨娲栭崗?`HostId`閵?    ///
+    /// 閻劋绨崷銊х矒缁旑垶鍣?Ctrl/Cmd+閻愮懓鍤弬鍥︽鐠侯垰绶為弮?閸掋倖鏌囨惔鏂跨秼鐠х増婀伴崷鎷岀箷閺勵垵绻欑粩?buffer-sync
     #[cfg(all(feature = "local_tty", feature = "local_fs"))]
     fn active_session_remote_host_id(&self, ctx: &AppContext) -> Option<warp_core::HostId> {
         #[cfg(not(target_family = "wasm"))]
@@ -16397,8 +18191,6 @@ impl TerminalView {
         }
     }
 
-    /// Zap:把终端文件链接里已解析出的绝对路径当作远端路径,构造 `RemotePath`。
-    /// 远端 SSH 主机均为 Unix,路径字符串由 shell-integration 上报的远端 cwd 拼接而来。
     #[cfg(all(feature = "local_tty", feature = "local_fs"))]
     fn remote_path_from_terminal_path(
         host_id: warp_core::HostId,
@@ -16407,7 +18199,7 @@ impl TerminalView {
         let path_str = path.to_str()?;
         let standardized = warp_util::standardized_path::StandardizedPath::try_new(path_str)
             .map_err(|e| {
-                log::warn!("无法将终端文件路径转换为远端路径 {path_str:?}: {e}");
+                log::warn!("閺冪姵纭剁亸鍡欑矒缁旑垱鏋冩禒鎯扮熅瀵板嫯娴嗛幑顫礋鏉╂粎顏捄顖氱窞 {path_str:?}: {e}");
             })
             .ok()?;
         Some(crate::code::buffer_location::RemotePath::new(
@@ -16416,10 +18208,6 @@ impl TerminalView {
         ))
     }
 
-    /// Zap:判断终端文件链接里的远端路径是否指向目录。
-    ///
-    /// 依据是缓存下来的远端 cwd 目录列表(由 `link_detection.rs` 拉取并写入)。
-    /// 未缓存或非目录返回 `false`(按文件处理)。
     #[cfg(all(
         feature = "local_tty",
         feature = "local_fs",
@@ -16438,13 +18226,8 @@ impl TerminalView {
         })
     }
 
-    /// Zap:在当前(远端)终端会话里 `cd` 进指定目录。
-    ///
-    /// 与本地点击目录链接的行为对齐 —— 远端目录无法在编辑器里打开,改为
-    /// 在该远端 shell 会话中执行 `cd <dir>`。
     #[cfg(all(feature = "local_tty", feature = "local_fs"))]
     fn cd_into_remote_directory(&mut self, path: &std::path::Path, ctx: &mut ViewContext<Self>) {
-        // 对路径做 shell 转义,防止包含 `"`、`$(...)`、反引号等字符时被远端 shell 执行注入命令。
         let quoted_dir = shell_words::quote(&path.to_string_lossy()).into_owned();
         self.input.update(ctx, |input, ctx| {
             input.try_execute_command(format!("cd -- {quoted_dir}").as_str(), ctx);
@@ -16460,11 +18243,9 @@ impl TerminalView {
     ) {
         ctx.notify();
 
-        // Zap:远端 SSH 会话走 buffer-sync 协议打开远端文件。
-        #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+        // Zap:鏉╂粎顏?SSH 娴兼俺鐦界挧?buffer-sync 閸楀繗顔呴幍鎾崇磻鏉╂粎顏弬鍥︽閵?        #[cfg(all(feature = "local_tty", feature = "local_fs"))]
         if let Some(host_id) = self.active_session_remote_host_id(ctx) {
-            // 远端目录点击:不在编辑器里打开,改为在该远端会话里 `cd` 进去。
-            #[cfg(not(target_family = "wasm"))]
+            // 鏉╂粎顏惄顔肩秿閻愮懓鍤?娑撳秴婀紓鏍帆閸ｃ劑鍣烽幍鎾崇磻,閺€閫涜礋閸︺劏顕氭潻婊咁伂娴兼俺鐦介柌?`cd` 鏉╂稑骞撻妴?            #[cfg(not(target_family = "wasm"))]
             if let Some(session_id) = self.active_block_session_id() {
                 if self.remote_clicked_path_is_dir(session_id, &path) {
                     self.cd_into_remote_directory(&path, ctx);
@@ -16500,12 +18281,9 @@ impl TerminalView {
     ) {
         ctx.notify();
 
-        // Zap:远端 SSH 会话走 buffer-sync 协议打开远端文件。
-        // 远端文件统一在内嵌代码编辑器打开,忽略 `target`(外部编辑器无法访问远端文件)。
-        #[cfg(all(feature = "local_tty", feature = "local_fs"))]
+        // Zap:鏉╂粎顏?SSH 娴兼俺鐦界挧?buffer-sync 閸楀繗顔呴幍鎾崇磻鏉╂粎顏弬鍥︽閵?        // 鏉╂粎顏弬鍥︽缂佺喍绔撮崷銊ュ敶瀹撳奔鍞惍浣虹椽鏉堟垵娅掗幍鎾崇磻,韫囩晫鏆?`target`(婢舵牠鍎寸紓鏍帆閸ｃ劍妫ゅ▔鏇☆問闂傤喛绻欑粩顖涙瀮娴?閵?        #[cfg(all(feature = "local_tty", feature = "local_fs"))]
         if let Some(host_id) = self.active_session_remote_host_id(ctx) {
-            // 远端目录点击:不在编辑器里打开,改为在该远端会话里 `cd` 进去。
-            #[cfg(not(target_family = "wasm"))]
+            // 鏉╂粎顏惄顔肩秿閻愮懓鍤?娑撳秴婀紓鏍帆閸ｃ劑鍣烽幍鎾崇磻,閺€閫涜礋閸︺劏顕氭潻婊咁伂娴兼俺鐦介柌?`cd` 鏉╂稑骞撻妴?            #[cfg(not(target_family = "wasm"))]
             if let Some(session_id) = self.active_block_session_id() {
                 if self.remote_clicked_path_is_dir(session_id, &path) {
                     self.cd_into_remote_directory(&path, ctx);
@@ -18320,10 +20098,7 @@ impl TerminalView {
                 AIAgentCitation::WarpDriveObject { uid } => {
                     ctx.emit(Event::ZapDriveObjectInPane(uid.clone()));
                 }
-                AIAgentCitation::WarpDocumentation { path: _ } => {
-                    // Zap fork 不继承上游 docs.warp.dev 文档站,
-                    // 点击该类型引用暂不跳转。
-                }
+                AIAgentCitation::WarpDocumentation { path: _ } => {}
                 AIAgentCitation::WebPage { url } => {
                     ctx.open_url(url);
                 }
@@ -18606,12 +20381,8 @@ impl TerminalView {
         })
     }
 
-    /// 在所有可见的 AI block 子视图层里查找已被用户选中的文本。
-    ///
-    /// AI block 的 rich content 选区由 `SelectableArea` 维护,与终端 grid 选区是两套
-    /// 互不通气的系统;`selection_to_string` 只会读 grid 选区,因此 Ctrl+Shift+C 与右键
-    /// 菜单的 `Copy` 都会漏掉 AI block 内的选区。这里集中提供一个兜底:遍历所有 AI block,
-    /// 取第一个 `selected_text(ctx).is_some()` 的结果即可。
+    /// 閸︺劍澧嶉張澶婂讲鐟欎胶娈?AI block 鐎涙劘顫嬮崶鎯х湴闁插本鐓￠幍鎯у嚒鐞氼偆鏁ら幋鐑解偓澶夎厬閻ㄥ嫭鏋冮張顑锯偓?    ///
+    /// AI block 閻?rich content 闁灏悽?`SelectableArea` 缂佸瓨濮?娑撳海绮撶粩?grid 闁灏弰顖欒⒈婵?    /// 娴滄帊绗夐柅姘毜閻ㄥ嫮閮寸紒?`selection_to_string` 閸欘亙绱扮拠?grid 闁灏?閸ョ姵顒?Ctrl+Shift+C 娑撳骸褰搁柨?    /// 閼挎粌宕熼惃?`Copy` 闁垝绱板蹇斿竴 AI block 閸愬懐娈戦柅澶婂隘閵嗗倽绻栭柌宀勬肠娑擃厽褰佹笟娑楃娑擃亜鍘规惔?闁秴宸婚幍鈧張?AI block,
     fn selected_text_from_visible_ai_blocks(&self, ctx: &AppContext) -> Option<String> {
         self.rich_content_views.iter().find_map(|rich_content| {
             let ai_metadata = rich_content.ai_block_metadata()?;
@@ -18764,16 +20535,11 @@ impl TerminalView {
             if matches!(state.menu_type, ContextMenuType::OneKeyPrompt) {
                 self.onekey_prompt_candidates.clear();
                 self.onekey_query.clear();
-                // 搜索 editor 是常驻字段(框架未提供 view 释放 API),
-                // 这里清空其内容以便下次打开时是干净状态。
                 self.onekey_search_editor
                     .clone()
                     .update(ctx, |editor, ctx| {
                         editor.clear_buffer(ctx);
                     });
-                // 该 `Menu` 实例被各类 ContextMenu 共用,关闭 OneKey 菜单时
-                // 把 variant 切回 Fixed 并清掉 pinned header,避免影响后续
-                // 右键 / Alt-screen 菜单。
                 ctx.update_view(&self.context_menu, |context_menu, _| {
                     context_menu.set_menu_variant(MenuVariant::Fixed);
                     context_menu.clear_pinned_header_builder();
@@ -18930,8 +20696,6 @@ impl TerminalView {
     fn context_menu_copy_selected_text(&mut self, ctx: &mut ViewContext<Self>) {
         send_telemetry_from_ctx!(TelemetryEvent::ContextMenuCopySelectedText, ctx);
 
-        // 优先试 AI block 内选区(详见 `selected_text_from_visible_ai_blocks` 注释)。
-        // 放在 `model.lock()` 之前,避免在终端模型锁持锁期间调用可能再次加锁的代码。
         if let Some(selected_text) = self.selected_text_from_visible_ai_blocks(ctx) {
             if !selected_text.is_empty() {
                 ctx.clipboard()
@@ -19857,9 +21621,11 @@ impl TerminalView {
             set_custom_keybinding(MOVE_LINE_END_BINDING_NAME, &CTRL_E_KEYSTROKE, ctx);
         }
         EmacsBindingsSettings::handle(ctx).update(ctx, |settings_model, settings_ctx| {
-            report_if_error!(settings_model
-                .emacs_bindings_banner_state
-                .set_value(BannerState::Dismissed, settings_ctx));
+            report_if_error!(
+                settings_model
+                    .emacs_bindings_banner_state
+                    .set_value(BannerState::Dismissed, settings_ctx)
+            );
         });
         self.is_emacs_bindings_banner_open = false;
         ctx.notify();
@@ -20711,6 +22477,14 @@ impl TerminalView {
             .map(|pwd| pwd.to_string())
     }
 
+    fn current_pwd(&self) -> Option<String> {
+        self.model
+            .lock()
+            .active_block_metadata()
+            .current_working_directory()
+            .map(|pwd| pwd.to_string())
+    }
+
     pub fn pwd_if_local(&self, ctx: &AppContext) -> Option<String> {
         self.active_session_path_if_local(ctx)
             .map(|path| path.to_string_lossy().into_owned())
@@ -21273,13 +23047,10 @@ impl TerminalView {
         let render_context = self.get_terminal_view_render_context(model, app);
 
         let enforce_minimum_contrast = *FontSettings::as_ref(app).enforce_minimum_contrast;
-        // Zap:alt-screen 渲染 cli subagent 浮窗的判定从原 `is_agent_in_control()`
-        // 放宽到 `is_agent_in_control_or_tagged_in()`。原来的判定只考虑 handoff 路径
-        // (agent 拿走 LRC 控制权),漏掉了用户主动 tag-in 路径(`SetInputModeAgent` →
-        // `tag_in_agent_for_user_long_running_command`)。后者是 Zap BYOP 链路下
-        // 浮窗的主要入口(controller `send_request_input` 检测 tagged-in → 注入
-        // `lrc_command_id` → chat_stream 合成虚拟 subagent → spawn CLISubagentView),
-        // 不放宽就算 view 已建,alt-screen 仍不挂载,模型回复永远看不到。
+        // Zap:alt-screen 濞撳弶鐓?cli subagent 濞搭喚鐛ラ惃鍕灲鐎规矮绮犻崢?`is_agent_in_control()`
+        // 閺€鎯ь啍閸?`is_agent_in_control_or_tagged_in()`閵嗗倸甯弶銉ф畱閸掋倕鐣鹃崣顏団偓鍐 handoff 鐠侯垰绶?
+        // (agent 閹疯儻铔?LRC 閹貉冨煑閺?,濠曞繑甯€娴滃棛鏁ら幋铚傚瘜閸?tag-in 鐠侯垰绶?`SetInputModeAgent` 閳?        // `tag_in_agent_for_user_long_running_command`)閵嗗倸鎮楅懓鍛Ц Zap BYOP 闁炬崘鐭炬稉?        // 濞搭喚鐛ラ惃鍕瘜鐟曚礁鍙嗛崣?controller `send_request_input` 濡偓濞?tagged-in 閳?濞夈劌鍙?
+        // `lrc_command_id` 閳?chat_stream 閸氬牊鍨氶搹姘珯 subagent 閳?spawn CLISubagentView),
         let active_cli_subagent_view = model
             .block_list()
             .active_block()
@@ -22505,7 +24276,6 @@ impl TerminalView {
                     {
                         *request_outcome = Some(outcome.clone());
                     }
-                    // 未知错误写本地日志,便于排查通知权限问题。
                     if let RequestPermissionsOutcome::OtherError { error_message } = &outcome {
                         log::error!(
                             "Unknown error when requesting notification permissions. error_msg: {error_message}"
@@ -23001,6 +24771,12 @@ impl TerminalView {
             return;
         }
 
+        if self.zmodem_transfer.accepts_upload_paths() {
+            let paths = paths.iter().map(PathBuf::from).collect();
+            self.handle_zmodem_paths_selected(ZmodemTransferPaths::upload(paths), ctx);
+            return;
+        }
+
         // Focus this pane when files are dropped on it.
         self.redetermine_global_focus(ctx);
 
@@ -23028,6 +24804,18 @@ impl TerminalView {
                 if num_attached == paths.len() {
                     return; // Return early, don't insert file paths
                 }
+            }
+        }
+
+        #[cfg(all(windows, feature = "local_tty"))]
+        if FeatureFlag::Lrzsz.is_enabled() {
+            let upload_paths = paths.iter().map(PathBuf::from).collect();
+            if self.try_start_legacy_ssh_zmodem_upload(
+                &ZmodemTransferPaths::upload(upload_paths),
+                ctx,
+                false,
+            ) {
+                return;
             }
         }
 
@@ -23075,22 +24863,20 @@ impl TerminalView {
         }
     }
 
-    pub fn initiate_ssh_file_upload(&self, paths: &[String], ctx: &mut ViewContext<Self>) {
-        let remote_pwd = self.pwd();
-        if let Some(ssh_connection_info) = self.ssh_session_info(ctx) {
-            let Some(ref ssh_host) = ssh_connection_info.host else {
-                return;
-            };
-            self.ssh_file_upload.update(ctx, |file_upload, ctx| {
-                file_upload.start_file_upload(
-                    ssh_host,
-                    paths,
-                    &remote_pwd,
-                    &ssh_connection_info,
-                    ctx,
-                )
-            });
-        }
+    pub fn initiate_ssh_file_upload(&self, paths: &[String], ctx: &mut ViewContext<Self>) -> bool {
+        let remote_pwd = self.current_pwd();
+        let Some(ssh_connection_info) = self.ssh_session_info(ctx) else {
+            log::warn!("SSH file upload requested, but no SSH session info was available");
+            return false;
+        };
+        let Some(ref ssh_host) = ssh_connection_info.host else {
+            log::warn!("SSH file upload requested, but SSH session info had no host");
+            return false;
+        };
+        self.ssh_file_upload.update(ctx, |file_upload, ctx| {
+            file_upload.start_file_upload(ssh_host, paths, &remote_pwd, &ssh_connection_info, ctx)
+        });
+        true
     }
 
     pub fn propagate_password_request(&mut self, ctx: &mut ViewContext<Self>) {
@@ -23106,14 +24892,16 @@ impl TerminalView {
     }
 
     fn ssh_session_info(&self, ctx: &ViewContext<Self>) -> Option<InteractiveSshCommand> {
-        let session = self
-            .active_block_session_id()
-            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))?;
-        session
-            .as_ref()
-            .subshell_info()
-            .as_ref()
-            .and_then(|info| info.ssh_connection_info.clone())
+        if self.active_session_is_ssh(ctx) {
+            return self
+                .active_session_remote_host(ctx)
+                .map(|host| InteractiveSshCommand {
+                    host: Some(host),
+                    port: None,
+                });
+        }
+
+        None
     }
 
     fn warpify_ssh_session(&mut self, ctx: &mut ViewContext<Self>) {
@@ -23663,6 +25451,10 @@ impl TypedActionView for TerminalView {
             | ToggleUsageFooter
             | RevealChildAgent { .. }
             | OpenCLIAgentRichInput
+            | ZmodemTransferPathsSelected(_)
+            | ZmodemFilePickerError { .. }
+            | CancelZmodemTransfer(_)
+            | DismissZmodemTransfer
             | ToggleSessionRecording => Empty,
         }
     }
@@ -24085,7 +25877,7 @@ impl TypedActionView for TerminalView {
                     OnboardingVersion::Agent(agent_version) => {
                         // The MeetTerminalInput step expects terminal mode. If the
                         // default session mode is Agent (e.g. cloud-synced settings),
-                        // the tab may already be in agent view — exit it first.
+                        // the tab may already be in agent view 閳?exit it first.
                         // This also removes any zero-state welcome blocks.
                         self.exit_agent_view(ctx);
                         self.start_agent_onboarding_tutorial(*agent_version, ctx);
@@ -24246,14 +26038,44 @@ impl TypedActionView for TerminalView {
                     )
                 });
             }
-            StartFileDropTarget => {
-                let Some(session) = self
-                    .active_block_session_id()
-                    .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
-                else {
-                    return;
+            ZmodemTransferPathsSelected(paths) => {
+                self.handle_zmodem_paths_selected(paths.clone(), ctx);
+            }
+            ZmodemFilePickerError { direction, message } => {
+                self.handle_zmodem_file_picker_error(*direction, message.clone(), ctx);
+            }
+            CancelZmodemTransfer(direction) => {
+                #[cfg(all(windows, feature = "local_tty"))]
+                self.cancel_legacy_ssh_zmodem_upload();
+                #[cfg(all(windows, feature = "local_tty"))]
+                {
+                    self.active_ssh_zmodem_generation = None;
+                }
+                self.is_file_drop_target = false;
+                self.zmodem_transfer = ZmodemTransferViewState::Cancelled {
+                    direction: *direction,
                 };
-                let sshed = self.model.lock().is_warpified_ssh() || session.is_legacy_ssh_session();
+                self.schedule_zmodem_transfer_hide(ctx);
+                ctx.emit(Event::ZmodemTransferPaths(ZmodemTransferPaths::cancel(
+                    *direction,
+                )));
+                ctx.notify();
+            }
+            DismissZmodemTransfer => {
+                self.advance_zmodem_transfer_generation();
+                self.is_file_drop_target = false;
+                self.zmodem_transfer = ZmodemTransferViewState::Idle;
+                ctx.notify();
+            }
+            StartFileDropTarget => {
+                if self.zmodem_transfer.accepts_upload_paths() {
+                    if !self.is_file_drop_target {
+                        self.is_file_drop_target = true;
+                        ctx.notify();
+                    }
+                    return;
+                }
+                let sshed = self.active_session_is_ssh(ctx);
                 if sshed && !self.is_file_drop_target {
                     self.is_file_drop_target = true;
                     ctx.notify();
@@ -24388,7 +26210,7 @@ impl TypedActionView for TerminalView {
                     } else {
                         let docs = doc_model.get_all_documents_for_conversation(conversation_id);
                         match docs.len() {
-                            0 => {} // No plans — nothing to do.
+                            0 => {} // No plans 閳?nothing to do.
                             1 => {
                                 let (document_id, doc) = &docs[0];
                                 ctx.emit(Event::OpenAIDocumentPane {
@@ -24398,7 +26220,7 @@ impl TypedActionView for TerminalView {
                                 });
                             }
                             _ => {
-                                // Multiple plans — open the plan picker menu.
+                                // Multiple plans 閳?open the plan picker menu.
                                 self.input.update(ctx, |input, ctx| {
                                     input.open_plan_menu(conversation_id, ctx);
                                 });
@@ -24844,27 +26666,31 @@ impl View for TerminalView {
                     }
                 },
             ),
-            Some(ContextMenuType::OneKeyPrompt) | Some(ContextMenuType::SuRootPasswordConfirm) => stack.add_positioned_overlay_child(
-                ChildView::new(&self.context_menu).finish(),
-                match input_mode {
-                    InputMode::PinnedToBottom | InputMode::Waterfall => {
-                        OffsetPositioning::offset_from_save_position_element(
-                            self.input.as_ref(app).save_position_id(),
-                            vec2f(0., -8.),
-                            PositionedElementOffsetBounds::WindowByPosition,
-                            PositionedElementAnchor::TopLeft,
-                            ChildAnchor::BottomLeft,
-                        )
-                    }
-                    InputMode::PinnedToTop => OffsetPositioning::offset_from_save_position_element(
-                        self.input.as_ref(app).save_position_id(),
-                        vec2f(0., 8.),
-                        PositionedElementOffsetBounds::WindowByPosition,
-                        PositionedElementAnchor::BottomLeft,
-                        ChildAnchor::TopLeft,
-                    ),
-                },
-            ),
+            Some(ContextMenuType::OneKeyPrompt) | Some(ContextMenuType::SuRootPasswordConfirm) => {
+                stack.add_positioned_overlay_child(
+                    ChildView::new(&self.context_menu).finish(),
+                    match input_mode {
+                        InputMode::PinnedToBottom | InputMode::Waterfall => {
+                            OffsetPositioning::offset_from_save_position_element(
+                                self.input.as_ref(app).save_position_id(),
+                                vec2f(0., -8.),
+                                PositionedElementOffsetBounds::WindowByPosition,
+                                PositionedElementAnchor::TopLeft,
+                                ChildAnchor::BottomLeft,
+                            )
+                        }
+                        InputMode::PinnedToTop => {
+                            OffsetPositioning::offset_from_save_position_element(
+                                self.input.as_ref(app).save_position_id(),
+                                vec2f(0., 8.),
+                                PositionedElementOffsetBounds::WindowByPosition,
+                                PositionedElementAnchor::BottomLeft,
+                                ChildAnchor::TopLeft,
+                            )
+                        }
+                    },
+                )
+            }
             Some(ContextMenuType::AIBlockAttachedContext { ai_block_view_id }) => stack
                 .add_positioned_overlay_child(
                     ChildView::new(&self.context_menu).finish(),
@@ -25037,6 +26863,14 @@ impl View for TerminalView {
             );
         }
 
+        if self.zmodem_transfer.should_render() {
+            stack.add_child(
+                Align::new(self.render_zmodem_transfer_panel(appearance))
+                    .bottom_right()
+                    .finish(),
+            );
+        }
+
         let element = if !did_wrap_terminal_size {
             wrap_in_terminal_size_element(
                 &self.resize_tx,
@@ -25046,7 +26880,10 @@ impl View for TerminalView {
             SavePosition::new(stack.finish(), &self.terminal_position_id()).finish()
         };
 
-        let final_element = if self.is_file_drop_target && FeatureFlag::SshDragAndDrop.is_enabled()
+        let final_element = if self.is_file_drop_target
+            && (FeatureFlag::SshDragAndDrop.is_enabled()
+                || FeatureFlag::Lrzsz.is_enabled()
+                || self.zmodem_transfer.accepts_upload_paths())
         {
             Container::new(element)
                 .with_foreground_overlay(appearance.theme().accent_overlay())
@@ -25455,6 +27292,9 @@ impl MenuPositioningProvider for TerminalViewMenuPositioningProvider {
 
 impl Drop for TerminalView {
     fn drop(&mut self) {
+        #[cfg(all(windows, feature = "local_tty"))]
+        self.cancel_legacy_ssh_zmodem_upload();
+
         if let Some((is_bootstrapped, pending_shell, has_pending_ssh_session)) =
             self.model.try_lock().map(|model| {
                 (
@@ -25492,6 +27332,137 @@ impl Drop for TerminalView {
             }
         };
     }
+}
+
+fn render_zmodem_progress_bar(progress: f32, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let progress = progress.clamp(0.0, 1.0);
+    let filled_weight = progress.max(0.001);
+    let empty_weight = (1.0 - progress).max(0.001);
+
+    Flex::row()
+        .with_child(
+            Shrinkable::new(
+                filled_weight,
+                ConstrainedBox::new(
+                    Container::new(Empty::new().finish())
+                        .with_background(theme.accent())
+                        .finish(),
+                )
+                .with_height(3.0)
+                .finish(),
+            )
+            .finish(),
+        )
+        .with_child(
+            Shrinkable::new(
+                empty_weight,
+                ConstrainedBox::new(
+                    Container::new(Empty::new().finish())
+                        .with_background(theme.surface_3())
+                        .finish(),
+                )
+                .with_height(3.0)
+                .finish(),
+            )
+            .finish(),
+        )
+        .finish()
+}
+
+fn zmodem_transfer_detail_for_state(state: &ZmodemTransferViewState) -> String {
+    match state {
+        ZmodemTransferViewState::Idle => String::new(),
+        ZmodemTransferViewState::AwaitingUpload => {
+            String::from("Choose files in the picker or drop them on the terminal.")
+        }
+        ZmodemTransferViewState::AwaitingDownloadDirectory => {
+            String::from("Choose a local folder for downloaded files.")
+        }
+        ZmodemTransferViewState::UploadStarting => {
+            String::from("Negotiating transfer with remote rz.")
+        }
+        ZmodemTransferViewState::Transferring {
+            transferred,
+            total,
+            started_at,
+            ..
+        } => match total {
+            Some(total) if *total > 0 => {
+                let percent = (*transferred as f64 / *total as f64 * 100.0).clamp(0.0, 100.0);
+                let speed = format_zmodem_transfer_speed(*transferred, *started_at);
+                format!(
+                    "{} / {} ({percent:.0}%) - {speed}",
+                    format_zmodem_bytes(*transferred),
+                    format_zmodem_bytes(*total)
+                )
+            }
+            Some(_) | None => {
+                let speed = format_zmodem_transfer_speed(*transferred, *started_at);
+                format!(
+                    "Transferred {} - {speed}",
+                    format_zmodem_bytes(*transferred)
+                )
+            }
+        },
+        ZmodemTransferViewState::Completed {
+            path: Some(path), ..
+        } => path.display().to_string(),
+        ZmodemTransferViewState::Completed { path: None, .. } => String::from("Transfer complete."),
+        ZmodemTransferViewState::Cancelled { .. } => String::from("Transfer cancelled."),
+        ZmodemTransferViewState::Failed { message, .. } => message.clone(),
+    }
+}
+
+fn format_zmodem_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit_index = 0;
+    while value >= 1024.0 && unit_index + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit_index += 1;
+    }
+
+    if unit_index == 0 {
+        format!("{bytes} {}", UNITS[unit_index])
+    } else {
+        format!("{value:.1} {}", UNITS[unit_index])
+    }
+}
+
+fn format_zmodem_speed(bytes_per_second: f64) -> String {
+    if !bytes_per_second.is_finite() || bytes_per_second <= 0.0 {
+        return String::from("--/s");
+    }
+    format!("{}/s", format_zmodem_bytes(bytes_per_second.round() as u64))
+}
+
+fn format_zmodem_transfer_speed(transferred: u64, started_at: Instant) -> String {
+    let elapsed = started_at.elapsed().as_secs_f64();
+    if elapsed <= 0.0 {
+        return String::from("--/s");
+    }
+    format_zmodem_speed(transferred as f64 / elapsed)
+}
+
+fn dispatch_zmodem_picker_cancel(
+    window_id: WindowId,
+    view_id: EntityId,
+    direction: ZmodemDirection,
+    ctx: &mut AppContext,
+) {
+    ctx.dispatch_typed_action_for_view(
+        window_id,
+        view_id,
+        &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::cancel(direction)),
+    );
+}
+
+fn is_zmodem_file_picker_cancel_error(
+    err: &warpui::platform::file_picker::FilePickerError,
+) -> bool {
+    let message = err.to_string().to_ascii_lowercase();
+    message.contains("cancel")
 }
 
 /// Returns an instance of [`SizeInfo`] that is to be used
@@ -25600,20 +27571,12 @@ fn command_first_word_and_suffix(command: &str) -> Option<(&str, &str)> {
     Some((first_word, rest))
 }
 
-/// `filter_and_sort_onekey_candidates` 的返回值。命中为空时与"全部命中"
-/// 区分开,方便调用方决定显示空态行还是候选行。
 #[derive(Debug, PartialEq, Eq)]
 enum OnekeyMenuRows {
-    /// 候选在 onekey_prompt_candidates 全集中的索引,按显示顺序排列。
     Ordered(Vec<usize>),
-    /// query 非空但没有任何候选命中。
     NoMatches,
 }
 
-/// 按 query 用 fuzzy_match 过滤+排序 OneKey 候选,返回展示顺序中的全集索引。
-/// query 为空时保持原顺序;非空时对 label / subtitle 各打分,取最高分降序。
-/// 提取为 pure 函数以便单元测试(skim 算法对 Unicode char 序列匹配,
-/// 中/英/日/韩字符均可直接搜索)。
 fn filter_and_sort_onekey_candidates<'a, I>(candidates: I, query: &str) -> OnekeyMenuRows
 where
     I: IntoIterator<Item = (&'a str, &'a str)>,
@@ -25633,7 +27596,6 @@ where
             Some((score, index))
         })
         .collect();
-    // score 大者靠前;同分按原始顺序(stable sort)。
     scored.sort_by(|a, b| b.0.cmp(&a.0));
     if scored.is_empty() {
         OnekeyMenuRows::NoMatches
@@ -25642,8 +27604,6 @@ where
     }
 }
 
-/// 渲染 OneKey 菜单顶部的搜索 header(pinned header builder 调用)。
-/// 提取为模块级函数以避免在 query 变化时反复构造 Arc 闭包。
 fn render_onekey_search_header(
     editor: &ViewHandle<EditorView>,
     app: &AppContext,

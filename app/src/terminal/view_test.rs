@@ -8,7 +8,7 @@ use crate::ai::agent::conversation::ConversationStatus;
 use parking_lot::FairMutex;
 use warp_multi_agent_api as api;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
-use warpui::{notification::UserNotification, Presenter, WindowInvalidation};
+use warpui::{Presenter, WindowInvalidation, notification::UserNotification};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::task::TaskId;
@@ -35,9 +35,10 @@ use crate::settings::{AISettings, AppEditorSettings, WarpPromptSeparator};
 
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::{
-    agent_view::AgentViewEntryOrigin, BlocklistAIHistoryModel, InputConfig, InputType,
+    BlocklistAIHistoryModel, InputConfig, InputType, agent_view::AgentViewEntryOrigin,
 };
 use crate::features::FeatureFlag;
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::event::{
     CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType,
 };
@@ -46,7 +47,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-use crate::terminal::CLIAgent;
+use crate::terminal::zmodem::{ZmodemDirection, ZmodemEvent};
 
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
@@ -55,11 +56,12 @@ use crate::view_components::find::FindWithinBlockState;
 
 use crate::persistence::model::AgentConversationData;
 use crate::terminal::model::ansi::{self, InitShellValue};
-use crate::terminal::model::ansi::{BootstrappedValue, PreexecValue};
+use crate::terminal::model::ansi::{BootstrappedValue, PrecmdValue, PreexecValue};
 use crate::terminal::model::block::{
     AgentInteractionMetadata, AgentViewVisibility, BlockId, SerializedAIMetadata, SerializedBlock,
 };
 use crate::terminal::model::blocks::{insert_block, TotalIndex};
+use crate::terminal::model::session::{BootstrapSessionType, SessionInfo};
 use crate::terminal::model::terminal_model::WithinBlock;
 use crate::terminal::view::load_ai_conversation::RestoredAIConversation;
 use crate::test_util::ai_agent_tasks::{
@@ -71,6 +73,1281 @@ use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 
 use super::*;
+
+#[test]
+fn zmodem_awaiting_upload_drag_drop_emits_upload_paths() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_paths_clone = emitted_paths.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ZmodemTransferPaths(paths) = event {
+                    emitted_paths_clone.borrow_mut().push(paths.clone());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+            view.handle_action(
+                &TerminalAction::DragAndDropFiles(vec![String::from("H:\\Downloads\\ddl.sql")]),
+                ctx,
+            );
+        });
+
+        let paths = emitted_paths.borrow();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].direction, ZmodemDirection::Upload);
+        assert_eq!(
+            paths[0].paths,
+            vec![PathBuf::from("H:\\Downloads\\ddl.sql")]
+        );
+    })
+}
+
+#[test]
+fn zmodem_failed_transfer_does_not_auto_hide() {
+    assert!(
+        !ZmodemTransferViewState::Failed {
+            direction: Some(ZmodemDirection::Upload),
+            message: String::from("ssh failed"),
+        }
+        .should_auto_hide()
+    );
+    assert!(
+        ZmodemTransferViewState::Completed {
+            direction: ZmodemDirection::Upload,
+            file_name: None,
+            path: None,
+        }
+        .should_auto_hide()
+    );
+    assert!(
+        ZmodemTransferViewState::Cancelled {
+            direction: ZmodemDirection::Upload,
+        }
+        .should_auto_hide()
+    );
+}
+
+#[test]
+fn zmodem_speed_format_uses_byte_units() {
+    assert_eq!(format_zmodem_speed(0.0), "--/s");
+    assert_eq!(format_zmodem_speed(512.0), "512 B/s");
+    assert_eq!(format_zmodem_speed(1536.0), "1.5 KB/s");
+    assert_eq!(format_zmodem_speed(2.0 * 1024.0 * 1024.0), "2.0 MB/s");
+}
+
+#[test]
+fn zmodem_transfer_detail_includes_speed() {
+    let started_at = Instant::now() - std::time::Duration::from_secs(2);
+    let view_state = ZmodemTransferViewState::Transferring {
+        direction: ZmodemDirection::Upload,
+        file_name: Some(String::from("upload.txt")),
+        path: None,
+        transferred: 2048,
+        total: Some(4096),
+        started_at,
+        last_rendered_at: started_at,
+    };
+    let detail = zmodem_transfer_detail_for_state(&view_state);
+
+    assert!(detail.contains("2.0 KB / 4.0 KB (50%)"));
+    assert!(detail.contains("KB/s"));
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_cancel_ignores_stale_ssh_side_channel_events() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.advance_zmodem_transfer_generation();
+            let generation = view.zmodem_transfer_generation;
+            view.active_ssh_zmodem_generation = Some(generation);
+            let started_at = Instant::now();
+            view.zmodem_transfer = ZmodemTransferViewState::Transferring {
+                direction: ZmodemDirection::Upload,
+                file_name: Some(String::from("upload.txt")),
+                path: Some(PathBuf::from("H:\\Downloads\\upload.txt")),
+                transferred: 64,
+                total: Some(128),
+                started_at,
+                last_rendered_at: started_at,
+            };
+
+            view.handle_action(
+                &TerminalAction::CancelZmodemTransfer(ZmodemDirection::Upload),
+                ctx,
+            );
+            view.handle_ssh_zmodem_event(
+                generation,
+                &ZmodemEvent::Progress {
+                    direction: ZmodemDirection::Upload,
+                    name: String::from("upload.txt"),
+                    transferred: 128,
+                    total: Some(128),
+                },
+                ctx,
+            );
+            view.handle_ssh_zmodem_event(
+                generation,
+                &ZmodemEvent::Completed {
+                    direction: ZmodemDirection::Upload,
+                },
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _ctx| {
+            assert_eq!(view.active_ssh_zmodem_generation, None);
+            assert!(matches!(
+                view.zmodem_transfer,
+                ZmodemTransferViewState::Cancelled {
+                    direction: ZmodemDirection::Upload,
+                }
+            ));
+        });
+    })
+}
+
+#[test]
+fn zmodem_failed_transfer_can_be_dismissed_without_emitting_cancel() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_paths_clone = emitted_paths.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ZmodemTransferPaths(paths) = event {
+                    emitted_paths_clone.borrow_mut().push(paths.clone());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_zmodem_event(
+                &ZmodemEvent::Failed {
+                    direction: Some(ZmodemDirection::Upload),
+                    message: String::from("remote rz exited before ZMODEM upload completed"),
+                },
+                ctx,
+            );
+            view.handle_action(&TerminalAction::DismissZmodemTransfer, ctx);
+        });
+
+        terminal.read(&app, |view, _ctx| {
+            assert!(matches!(
+                view.zmodem_transfer,
+                ZmodemTransferViewState::Idle
+            ));
+        });
+        assert!(emitted_paths.borrow().is_empty());
+    })
+}
+
+#[test]
+fn zmodem_empty_upload_selection_emits_cancel_to_pty() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_paths_clone = emitted_paths.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ZmodemTransferPaths(paths) = event {
+                    emitted_paths_clone.borrow_mut().push(paths.clone());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+            view.handle_action(
+                &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::cancel(
+                    ZmodemDirection::Upload,
+                )),
+                ctx,
+            );
+        });
+
+        let paths = emitted_paths.borrow();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].direction, ZmodemDirection::Upload);
+        assert!(paths[0].paths.is_empty());
+        terminal.read(&app, |view, _ctx| {
+            assert!(matches!(
+                view.zmodem_transfer,
+                ZmodemTransferViewState::Cancelled {
+                    direction: ZmodemDirection::Upload,
+                }
+            ));
+        });
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_upload_in_legacy_ssh_session_uses_controlmaster_side_channel() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_zmodem_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_zmodem_paths_clone = emitted_zmodem_paths.clone();
+        let silent_aborts = Rc::new(RefCell::new(0usize));
+        let silent_aborts_clone = silent_aborts.clone();
+        let upload_commands = Rc::new(RefCell::new(Vec::new()));
+        let upload_commands_clone = upload_commands.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::ZmodemTransferPaths(paths) => {
+                    emitted_zmodem_paths_clone.borrow_mut().push(paths.clone());
+                }
+                Event::CopyFileToRemote { command, .. } => {
+                    upload_commands_clone.borrow_mut().push(command.clone());
+                }
+                Event::AbortZmodemSilently => {
+                    *silent_aborts_clone.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(1)
+                        .with_user(String::from("user"))
+                        .with_hostname(String::from("example.com"))
+                        .with_ssh_socket_path(PathBuf::from(
+                            "C:\\Users\\lc\\.ssh\\warp-control.sock",
+                        )),
+                );
+            });
+            let mut model = view.model.lock();
+            model.simulate_long_running_block("rz", "");
+            model
+                .block_list_mut()
+                .active_block_mut()
+                .set_session_id(1.into());
+            drop(model);
+
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+        });
+
+        assert_eventually!(
+            terminal.read(&app, |view, ctx| view.sessions(ctx).get(1.into()).is_some()),
+            "SSH session should be bootstrapped"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::upload(vec![
+                    PathBuf::from("H:\\Downloads\\ddl.sql"),
+                ])),
+                ctx,
+            );
+        });
+
+        let emitted_zmodem_paths = emitted_zmodem_paths.borrow();
+        assert!(emitted_zmodem_paths.is_empty());
+        assert_eq!(*silent_aborts.borrow(), 1);
+        assert!(upload_commands.borrow().is_empty());
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_upload_uses_controlmaster_when_only_model_active_session_is_legacy_ssh() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_zmodem_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_zmodem_paths_clone = emitted_zmodem_paths.clone();
+        let silent_aborts = Rc::new(RefCell::new(0usize));
+        let silent_aborts_clone = silent_aborts.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::ZmodemTransferPaths(paths) => {
+                    emitted_zmodem_paths_clone.borrow_mut().push(paths.clone());
+                }
+                Event::AbortZmodemSilently => {
+                    *silent_aborts_clone.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(1)
+                        .with_user(String::from("user"))
+                        .with_hostname(String::from("example.com"))
+                        .with_ssh_socket_path(PathBuf::from(
+                            "C:\\Users\\lc\\.ssh\\warp-control.sock",
+                        )),
+                );
+            });
+            view.model_events_handle.update(ctx, |dispatcher, _| {
+                dispatcher.set_active_session_id_for_test(Some(1.into()));
+            });
+            view.model.lock().simulate_long_running_block("rz", "");
+
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::upload(vec![
+                    PathBuf::from("H:\\Downloads\\ddl.sql"),
+                ])),
+                ctx,
+            );
+        });
+
+        assert!(emitted_zmodem_paths.borrow().is_empty());
+        assert_eq!(*silent_aborts.borrow(), 1);
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_upload_uses_parent_legacy_ssh_session_for_spawned_remote_session() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_zmodem_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_zmodem_paths_clone = emitted_zmodem_paths.clone();
+        let silent_aborts = Rc::new(RefCell::new(0usize));
+        let silent_aborts_clone = silent_aborts.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::ZmodemTransferPaths(paths) => {
+                    emitted_zmodem_paths_clone.borrow_mut().push(paths.clone());
+                }
+                Event::AbortZmodemSilently => {
+                    *silent_aborts_clone.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(1)
+                        .with_user(String::from("user"))
+                        .with_hostname(String::from("example.com"))
+                        .with_ssh_socket_path(PathBuf::from(
+                            "C:\\Users\\lc\\.ssh\\warp-control.sock",
+                        )),
+                );
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(2)
+                        .with_user(String::from("user"))
+                        .with_hostname(String::from("example.com"))
+                        .with_session_type(BootstrapSessionType::WarpifiedRemote)
+                        .with_spawning_session_id(1),
+                );
+            });
+            let mut model = view.model.lock();
+            model.simulate_long_running_block("rz", "");
+            model
+                .block_list_mut()
+                .active_block_mut()
+                .set_session_id(2.into());
+            drop(model);
+
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::upload(vec![
+                    PathBuf::from("H:\\Downloads\\ddl.sql"),
+                ])),
+                ctx,
+            );
+        });
+
+        assert!(emitted_zmodem_paths.borrow().is_empty());
+        assert_eq!(*silent_aborts.borrow(), 1);
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_upload_context_uses_remote_server_control_path_when_session_has_no_legacy_socket() {
+    let control_path = PathBuf::from("C:\\Users\\lc\\.ssh\\warp-control.sock");
+    let mut sessions = crate::terminal::model::session::Sessions::new_for_test();
+    sessions.register_session_for_test(
+        SessionInfo::new_for_test()
+            .with_id(1)
+            .with_user(String::from("user"))
+            .with_hostname(String::from("example.com"))
+            .with_session_type(BootstrapSessionType::WarpifiedRemote),
+    );
+
+    let context = legacy_ssh_zmodem_upload_context(&[1.into()], &sessions, |session_id| {
+        if session_id == SessionId::from(1) {
+            Some(&control_path)
+        } else {
+            None
+        }
+    })
+    .expect("remote-server ControlMaster path should be accepted");
+
+    assert_eq!(context.session_id, SessionId::from(1));
+    assert_eq!(context.socket_path, control_path);
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_direct_upload_context_preserves_original_ssh_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, _ctx| {
+            let mut model = view.model.lock();
+            model.simulate_long_running_block(
+                "ssh -F C:/Users/lc/.ssh/config -J bastion -i C:/keys/id_ed25519 -p 2222 ak/crop-ak5070",
+                "ready",
+            );
+            model.init_shell(InitShellValue {
+                session_id: 1.into(),
+                shell: "bash".to_owned(),
+                is_subshell: true,
+                user: "alkaid".to_owned(),
+                hostname: "alkaid-5070".to_owned(),
+                ..Default::default()
+            });
+            model.bootstrapped(BootstrappedValue {
+                shell: "bash".to_owned(),
+                path: Some("/tmp".to_owned()),
+                ..Default::default()
+            });
+        });
+
+        assert_eventually!(
+            terminal.read(&app, |view, ctx| view.sessions(ctx).get(1.into()).is_some()),
+            "SSH session should be bootstrapped"
+        );
+
+        terminal.read(&app, |view, ctx| {
+            let context =
+                direct_ssh_zmodem_upload_context(
+                    &[1.into()],
+                    view.sessions.as_ref(ctx),
+                    None,
+                    &HashMap::new(),
+                    None,
+                )
+                    .expect("direct ssh context should use subshell metadata");
+            assert_eq!(
+                context.connection_info.host.as_deref(),
+                Some("ak/crop-ak5070")
+            );
+            assert_eq!(context.connection_info.port.as_deref(), Some("2222"));
+            assert_eq!(
+                context.ssh_command.as_deref(),
+                Some(
+                    "ssh -F C:/Users/lc/.ssh/config -J bastion -i C:/keys/id_ed25519 -p 2222 ak/crop-ak5070"
+                )
+            );
+        });
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_active_command_context_detects_remote_rz_cwd_instead_of_using_local_pwd() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, _ctx| {
+            let mut model = view.model.lock();
+            model.simulate_block("cd C:\\Users\\lc", "");
+            model.precmd(PrecmdValue {
+                pwd: Some("C:\\Users\\lc".to_owned()),
+                session_id: Some(0),
+                ..Default::default()
+            });
+            model.simulate_long_running_block("ssh alkaid@alkaid-5070", "ready");
+        });
+
+        terminal.read(&app, |view, _ctx| {
+            let context = view
+                .direct_ssh_zmodem_context_from_active_command(&[1.into()])
+                .expect("active ssh command should provide direct ssh context");
+
+            assert_eq!(
+                context.connection_info.host.as_deref(),
+                Some("alkaid@alkaid-5070")
+            );
+            assert_eq!(context.cwd, None);
+            assert!(context.detect_remote_rz_cwd);
+        });
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_direct_upload_context_carries_ssh_manager_auth() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, _ctx| {
+            let mut model = view.model.lock();
+            model.simulate_long_running_block("ssh alkaid@alkaid-5070", "ready");
+            model
+                .block_list_mut()
+                .active_block_mut()
+                .set_session_id(1.into());
+            drop(model);
+            view.ssh_manager_zmodem_auth_by_session.insert(
+                1.into(),
+                SshManagerZmodemAuthContext {
+                    ssh_command: String::from("ssh alkaid@alkaid-5070"),
+                    secret_lookup_id: String::from("node-1"),
+                    secret_kind: warp_ssh_manager::SecretKind::Password,
+                    auth_type: warp_ssh_manager::AuthType::Password,
+                },
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let context = direct_ssh_zmodem_upload_context(
+                &[1.into()],
+                view.sessions.as_ref(ctx),
+                None,
+                &view.ssh_manager_zmodem_auth_by_session,
+                None,
+            )
+            .expect("direct ssh context should use subshell metadata");
+            let auth = context
+                .ssh_manager_auth
+                .expect("SSH Manager auth should be carried with session context");
+            assert_eq!(auth.secret_lookup_id, "node-1");
+            assert_eq!(auth.secret_kind, warp_ssh_manager::SecretKind::Password);
+            assert_eq!(auth.auth_type, warp_ssh_manager::AuthType::Password);
+        });
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_active_command_context_carries_ssh_manager_auth() {
+    let mut auth_by_session = HashMap::new();
+    auth_by_session.insert(
+        1.into(),
+        SshManagerZmodemAuthContext {
+            ssh_command: String::from("ssh alkaid@alkaid-5070"),
+            secret_lookup_id: String::from("node-1"),
+            secret_kind: warp_ssh_manager::SecretKind::Password,
+            auth_type: warp_ssh_manager::AuthType::Password,
+        },
+    );
+
+    let (auth_source_session_id, auth) = ssh_manager_auth_for_direct_ssh_command(
+        None,
+        &[1.into()],
+        "ssh alkaid@alkaid-5070",
+        &auth_by_session,
+        None,
+    );
+
+    assert_eq!(auth_source_session_id, Some(1.into()));
+    let auth = auth.expect("active ssh command context should carry SSH Manager auth");
+    assert_eq!(auth.secret_lookup_id, "node-1");
+    assert_eq!(auth.secret_kind, warp_ssh_manager::SecretKind::Password);
+    assert_eq!(auth.auth_type, warp_ssh_manager::AuthType::Password);
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_active_command_context_uses_pending_ssh_manager_auth_when_session_not_bound() {
+    let pending_auth = SshManagerZmodemAuthContext {
+        ssh_command: String::from("ssh alkaid@alkaid-5070"),
+        secret_lookup_id: String::from("node-1"),
+        secret_kind: warp_ssh_manager::SecretKind::Password,
+        auth_type: warp_ssh_manager::AuthType::Password,
+    };
+
+    let (auth_source_session_id, auth) = ssh_manager_auth_for_direct_ssh_command(
+        Some(1.into()),
+        &[1.into()],
+        "ssh alkaid@alkaid-5070",
+        &HashMap::new(),
+        Some(&pending_auth),
+    );
+
+    assert_eq!(auth_source_session_id, None);
+    let auth = auth.expect("active ssh command should use matching pending SSH Manager auth");
+    assert_eq!(auth.secret_lookup_id, "node-1");
+    assert_eq!(auth.secret_kind, warp_ssh_manager::SecretKind::Password);
+    assert_eq!(auth.auth_type, warp_ssh_manager::AuthType::Password);
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_active_command_context_ignores_pending_auth_for_different_command() {
+    let pending_auth = SshManagerZmodemAuthContext {
+        ssh_command: String::from("ssh other-host"),
+        secret_lookup_id: String::from("node-1"),
+        secret_kind: warp_ssh_manager::SecretKind::Password,
+        auth_type: warp_ssh_manager::AuthType::Password,
+    };
+
+    let (auth_source_session_id, auth) = ssh_manager_auth_for_direct_ssh_command(
+        Some(1.into()),
+        &[1.into()],
+        "ssh alkaid@alkaid-5070",
+        &HashMap::new(),
+        Some(&pending_auth),
+    );
+
+    assert_eq!(auth_source_session_id, None);
+    assert!(auth.is_none());
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_download_parses_simple_remote_sz_command() {
+    assert_eq!(
+        parse_remote_sz_command("sz tmp/codex-zmodem-test.txt"),
+        Some(vec![
+            String::from("sz"),
+            String::from("tmp/codex-zmodem-test.txt")
+        ])
+    );
+    assert_eq!(
+        parse_remote_sz_command("sz 'tmp/file with spaces.txt'"),
+        Some(vec![
+            String::from("sz"),
+            String::from("tmp/file with spaces.txt")
+        ])
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_download_does_not_parse_compound_remote_sz_command() {
+    assert_eq!(parse_remote_sz_command("sz tmp/file.txt | cat"), None);
+    assert_eq!(parse_remote_sz_command("cd /tmp && sz file.txt"), None);
+    assert_eq!(parse_remote_sz_command("echo sz tmp/file.txt"), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_direct_ssh_auth_falls_back_to_matching_ssh_manager_server() {
+    let connection_info = InteractiveSshCommand {
+        host: Some(String::from("alkaid@alkaid-5070")),
+        port: None,
+    };
+    let server = warp_ssh_manager::SshServerInfo {
+        node_id: String::from("server-1"),
+        host: String::from("alkaid-5070"),
+        port: 22,
+        username: String::from("alkaid"),
+        auth_type: warp_ssh_manager::AuthType::Password,
+        key_path: None,
+        credential_id: None,
+        startup_command: None,
+        notes: None,
+        last_connected_at: None,
+    };
+    let resolved_auth = warp_ssh_manager::ResolvedSshAuth {
+        username: String::from("alkaid"),
+        auth_type: warp_ssh_manager::AuthType::Password,
+        key_path: None,
+        secret_lookup_id: String::from("server-1"),
+        secret_kind: warp_ssh_manager::SecretKind::Password,
+    };
+
+    let auth = find_ssh_manager_zmodem_auth_context_from_servers(
+        &connection_info,
+        "ssh alkaid@alkaid-5070",
+        [(server, resolved_auth)],
+    )
+    .expect("matching SSH Manager server should provide ZMODEM auth context");
+
+    assert_eq!(auth.secret_lookup_id, "server-1");
+    assert_eq!(auth.secret_kind, warp_ssh_manager::SecretKind::Password);
+    assert_eq!(auth.auth_type, warp_ssh_manager::AuthType::Password);
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_direct_ssh_auth_fallback_requires_matching_port() {
+    let connection_info = InteractiveSshCommand {
+        host: Some(String::from("alkaid@alkaid-5070")),
+        port: Some(String::from("2222")),
+    };
+    let server = warp_ssh_manager::SshServerInfo {
+        node_id: String::from("server-1"),
+        host: String::from("alkaid-5070"),
+        port: 22,
+        username: String::from("alkaid"),
+        auth_type: warp_ssh_manager::AuthType::Password,
+        key_path: None,
+        credential_id: None,
+        startup_command: None,
+        notes: None,
+        last_connected_at: None,
+    };
+    let resolved_auth = warp_ssh_manager::ResolvedSshAuth {
+        username: String::from("alkaid"),
+        auth_type: warp_ssh_manager::AuthType::Password,
+        key_path: None,
+        secret_lookup_id: String::from("server-1"),
+        secret_kind: warp_ssh_manager::SecretKind::Password,
+    };
+
+    assert!(
+        find_ssh_manager_zmodem_auth_context_from_servers(
+            &connection_info,
+            "ssh -p 2222 alkaid@alkaid-5070",
+            [(server, resolved_auth)],
+        )
+        .is_none()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_ssh_manager_auth_binds_only_matching_bootstrap_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.set_pending_ssh_manager_zmodem_auth(
+                String::from("ssh expected-host"),
+                String::from("node-1"),
+                warp_ssh_manager::SecretKind::Password,
+                warp_ssh_manager::AuthType::Password,
+            );
+
+            let mut model = view.model.lock();
+            model.simulate_long_running_block("ssh other-host", "ready");
+            model.init_shell(InitShellValue {
+                session_id: 1.into(),
+                shell: "bash".to_owned(),
+                is_subshell: true,
+                user: "other".to_owned(),
+                hostname: "other-host".to_owned(),
+                ..Default::default()
+            });
+            model.bootstrapped(BootstrappedValue {
+                shell: "bash".to_owned(),
+                path: Some("/tmp".to_owned()),
+                ..Default::default()
+            });
+            drop(model);
+            ctx.notify();
+        });
+
+        assert_eventually!(
+            terminal.read(&app, |view, ctx| view.sessions(ctx).get(1.into()).is_some()),
+            "first SSH session should be bootstrapped"
+        );
+
+        terminal.read(&app, |view, _ctx| {
+            assert!(view.ssh_manager_zmodem_auth_by_session.is_empty());
+            assert!(view.pending_ssh_manager_zmodem_auth.is_some());
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            let mut model = view.model.lock();
+            model.simulate_long_running_block("ssh expected-host", "ready");
+            model.init_shell(InitShellValue {
+                session_id: 2.into(),
+                shell: "bash".to_owned(),
+                is_subshell: true,
+                user: "expected".to_owned(),
+                hostname: "expected-host".to_owned(),
+                ..Default::default()
+            });
+            model.bootstrapped(BootstrappedValue {
+                shell: "bash".to_owned(),
+                path: Some("/tmp".to_owned()),
+                ..Default::default()
+            });
+            drop(model);
+            ctx.notify();
+        });
+
+        assert_eventually!(
+            terminal.read(&app, |view, ctx| view.sessions(ctx).get(2.into()).is_some()),
+            "matching SSH session should be bootstrapped"
+        );
+
+        terminal.read(&app, |view, _ctx| {
+            assert!(view.pending_ssh_manager_zmodem_auth.is_none());
+            let auth = view
+                .ssh_manager_zmodem_auth_by_session
+                .get(&SessionId::from(2))
+                .expect("matching session should receive SSH Manager auth");
+            assert_eq!(auth.secret_lookup_id, "node-1");
+        });
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_upload_with_stale_ssh_session_does_not_route_to_ssh_file_upload() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_zmodem_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_zmodem_paths_clone = emitted_zmodem_paths.clone();
+        let upload_commands = Rc::new(RefCell::new(Vec::new()));
+        let upload_commands_clone = upload_commands.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::ZmodemTransferPaths(paths) => {
+                    emitted_zmodem_paths_clone.borrow_mut().push(paths.clone());
+                }
+                Event::CopyFileToRemote { command, .. } => {
+                    upload_commands_clone.borrow_mut().push(command.clone());
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("ssh -p 2222 user@example.com", "ready");
+            view.model.lock().init_shell(InitShellValue {
+                session_id: 1.into(),
+                shell: "bash".to_owned(),
+                is_subshell: true,
+                user: "user".to_owned(),
+                hostname: "example.com".to_owned(),
+                ..Default::default()
+            });
+            view.model.lock().bootstrapped(BootstrappedValue {
+                shell: "bash".to_owned(),
+                path: Some("/tmp".to_owned()),
+                ..Default::default()
+            });
+            view.handle_terminal_event(
+                &ModelEvent::ExitShell {
+                    session_id: 1.into(),
+                },
+                ctx,
+            );
+            view.model.lock().finish_block();
+            view.model.lock().simulate_long_running_block("rz", "");
+
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+        });
+
+        assert_eventually!(
+            terminal.read(&app, |view, ctx| view.sessions(ctx).get(1.into()).is_some()),
+            "SSH session should remain known"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::upload(vec![
+                    PathBuf::from("H:\\Downloads\\ddl.sql"),
+                ])),
+                ctx,
+            );
+        });
+
+        let emitted_zmodem_paths = emitted_zmodem_paths.borrow();
+        assert_eq!(emitted_zmodem_paths.len(), 1);
+        assert_eq!(emitted_zmodem_paths[0].direction, ZmodemDirection::Upload);
+        assert_eq!(
+            emitted_zmodem_paths[0].paths,
+            vec![PathBuf::from("H:\\Downloads\\ddl.sql")]
+        );
+        assert!(upload_commands.borrow().is_empty());
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_upload_in_active_ssh_command_without_remote_session_uses_direct_ssh_side_channel() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_zmodem_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_zmodem_paths_clone = emitted_zmodem_paths.clone();
+        let silent_aborts = Rc::new(RefCell::new(0usize));
+        let silent_aborts_clone = silent_aborts.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::ZmodemTransferPaths(paths) => {
+                    emitted_zmodem_paths_clone.borrow_mut().push(paths.clone());
+                }
+                Event::AbortZmodemSilently => {
+                    *silent_aborts_clone.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_long_running_block(
+                "ssh -p 2222 user@example.com",
+                "rz waiting to receive",
+            );
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::upload(vec![
+                    PathBuf::from("H:\\Downloads\\ddl.sql"),
+                ])),
+                ctx,
+            );
+        });
+
+        assert!(emitted_zmodem_paths.borrow().is_empty());
+        assert_eq!(*silent_aborts.borrow(), 1);
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_upload_in_interactive_ssh_subshell_without_controlmaster_uses_ssh_side_channel() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_zmodem_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_zmodem_paths_clone = emitted_zmodem_paths.clone();
+        let silent_aborts = Rc::new(RefCell::new(0usize));
+        let silent_aborts_clone = silent_aborts.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::ZmodemTransferPaths(paths) => {
+                    emitted_zmodem_paths_clone.borrow_mut().push(paths.clone());
+                }
+                Event::AbortZmodemSilently => {
+                    *silent_aborts_clone.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("ssh -p 2222 user@example.com", "ready");
+            view.model.lock().init_shell(InitShellValue {
+                session_id: 1.into(),
+                shell: "bash".to_owned(),
+                is_subshell: true,
+                user: "user".to_owned(),
+                hostname: "example.com".to_owned(),
+                ..Default::default()
+            });
+            view.model.lock().bootstrapped(BootstrappedValue {
+                shell: "bash".to_owned(),
+                path: Some("/tmp".to_owned()),
+                ..Default::default()
+            });
+            view.model.lock().simulate_long_running_block("rz", "");
+            view.model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_session_id(1.into());
+
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+        });
+
+        assert_eventually!(
+            terminal.read(&app, |view, ctx| view.sessions(ctx).get(1.into()).is_some()),
+            "SSH session should be bootstrapped"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::upload(vec![
+                    PathBuf::from("H:\\Downloads\\ddl.sql"),
+                ])),
+                ctx,
+            );
+        });
+
+        assert!(emitted_zmodem_paths.borrow().is_empty());
+        assert_eq!(*silent_aborts.borrow(), 1);
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_drag_drop_in_interactive_ssh_subshell_uses_ssh_side_channel() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_zmodem_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_zmodem_paths_clone = emitted_zmodem_paths.clone();
+        let upload_commands = Rc::new(RefCell::new(Vec::new()));
+        let upload_commands_clone = upload_commands.clone();
+        let silent_aborts = Rc::new(RefCell::new(0usize));
+        let silent_aborts_clone = silent_aborts.clone();
+        let _lrzsz = FeatureFlag::Lrzsz.override_enabled(true);
+        let _ssh_drag_and_drop = FeatureFlag::SshDragAndDrop.override_enabled(false);
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::ZmodemTransferPaths(paths) => {
+                    emitted_zmodem_paths_clone.borrow_mut().push(paths.clone());
+                }
+                Event::CopyFileToRemote { command, .. } => {
+                    upload_commands_clone.borrow_mut().push(command.clone());
+                }
+                Event::AbortZmodemSilently => {
+                    *silent_aborts_clone.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, _ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("ssh -p 2222 user@example.com", "ready");
+            view.model.lock().init_shell(InitShellValue {
+                session_id: 1.into(),
+                shell: "bash".to_owned(),
+                is_subshell: true,
+                user: "user".to_owned(),
+                hostname: "example.com".to_owned(),
+                ..Default::default()
+            });
+            view.model.lock().bootstrapped(BootstrappedValue {
+                shell: "bash".to_owned(),
+                path: Some("/tmp".to_owned()),
+                ..Default::default()
+            });
+        });
+
+        assert_eventually!(
+            terminal.read(&app, |view, ctx| view.sessions(ctx).get(1.into()).is_some()),
+            "SSH session should be bootstrapped"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .block_list_mut()
+                .active_block_mut()
+                .set_session_id(1.into());
+
+            view.handle_action(
+                &TerminalAction::DragAndDropFiles(vec![String::from("H:\\Downloads\\ddl.sql")]),
+                ctx,
+            );
+        });
+
+        assert!(emitted_zmodem_paths.borrow().is_empty());
+        assert!(upload_commands.borrow().is_empty());
+        assert_eq!(*silent_aborts.borrow(), 0);
+        terminal.read(&app, |view, _ctx| {
+            assert!(matches!(
+                view.zmodem_transfer,
+                ZmodemTransferViewState::UploadStarting
+            ));
+        });
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_upload_in_current_remote_session_without_controlmaster_uses_ssh_side_channel() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_zmodem_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_zmodem_paths_clone = emitted_zmodem_paths.clone();
+        let upload_commands = Rc::new(RefCell::new(Vec::new()));
+        let upload_commands_clone = upload_commands.clone();
+        let silent_aborts = Rc::new(RefCell::new(0usize));
+        let silent_aborts_clone = silent_aborts.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::ZmodemTransferPaths(paths) => {
+                    emitted_zmodem_paths_clone.borrow_mut().push(paths.clone());
+                }
+                Event::CopyFileToRemote { command, .. } => {
+                    upload_commands_clone.borrow_mut().push(command.clone());
+                }
+                Event::AbortZmodemSilently => {
+                    *silent_aborts_clone.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(7)
+                        .with_user(String::from("user"))
+                        .with_hostname(String::from("example.com"))
+                        .with_session_type(BootstrapSessionType::WarpifiedRemote),
+                );
+            });
+            let mut model = view.model.lock();
+            model.simulate_long_running_block("rz", "");
+            model
+                .block_list_mut()
+                .active_block_mut()
+                .set_session_id(7.into());
+            drop(model);
+
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TerminalAction::ZmodemTransferPathsSelected(ZmodemTransferPaths::upload(vec![
+                    PathBuf::from("H:\\Downloads\\ddl.sql"),
+                ])),
+                ctx,
+            );
+        });
+
+        assert!(emitted_zmodem_paths.borrow().is_empty());
+        assert_eq!(*silent_aborts.borrow(), 1);
+        assert!(upload_commands.borrow().is_empty());
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_download_in_current_remote_session_without_controlmaster_uses_ssh_side_channel() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_zmodem_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_zmodem_paths_clone = emitted_zmodem_paths.clone();
+        let silent_aborts = Rc::new(RefCell::new(0usize));
+        let silent_aborts_clone = silent_aborts.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::ZmodemTransferPaths(paths) => {
+                    emitted_zmodem_paths_clone.borrow_mut().push(paths.clone());
+                }
+                Event::AbortZmodemSilently => {
+                    *silent_aborts_clone.borrow_mut() += 1;
+                }
+                _ => {}
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(7)
+                        .with_user(String::from("user"))
+                        .with_hostname(String::from("example.com"))
+                        .with_session_type(BootstrapSessionType::WarpifiedRemote),
+                );
+            });
+            let mut model = view.model.lock();
+            model.simulate_long_running_block("sz tmp/codex-zmodem-test.txt", "");
+            model
+                .block_list_mut()
+                .active_block_mut()
+                .set_session_id(7.into());
+            drop(model);
+
+            view.handle_zmodem_event(&ZmodemEvent::DownloadDirectoryRequested, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &TerminalAction::ZmodemTransferPathsSelected(
+                    ZmodemTransferPaths::download_directory(PathBuf::from("H:\\Downloads")),
+                ),
+                ctx,
+            );
+        });
+
+        assert!(emitted_zmodem_paths.borrow().is_empty());
+        assert_eq!(*silent_aborts.borrow(), 1);
+        terminal.read(&app, |view, _ctx| {
+            assert!(matches!(
+                view.zmodem_transfer,
+                ZmodemTransferViewState::Transferring {
+                    direction: ZmodemDirection::Download,
+                    ..
+                }
+            ));
+        });
+    })
+}
+
+#[test]
+fn zmodem_transferring_upload_drag_drop_does_not_replace_transfer() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let emitted_paths = Rc::new(RefCell::new(Vec::new()));
+        let emitted_paths_clone = emitted_paths.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::ZmodemTransferPaths(paths) = event {
+                    emitted_paths_clone.borrow_mut().push(paths.clone());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_zmodem_event(
+                &ZmodemEvent::FileStarted {
+                    direction: ZmodemDirection::Upload,
+                    name: String::from("existing.sql"),
+                    size: Some(1024),
+                    path: Some(PathBuf::from("H:\\Downloads\\existing.sql")),
+                },
+                ctx,
+            );
+            view.handle_action(
+                &TerminalAction::DragAndDropFiles(vec![String::from("H:\\Downloads\\ddl.sql")]),
+                ctx,
+            );
+        });
+
+        assert!(emitted_paths.borrow().is_empty());
+    })
+}
 
 struct TestTerminalManager {
     model: Arc<FairMutex<TerminalModel>>,
@@ -1009,9 +2286,11 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
                 sessions.remove_session(view.view_id, ctx);
             });
             assert!(!view.has_active_cli_agent_input_session(ctx));
-            assert!(CLIAgentSessionsModel::as_ref(ctx)
-                .session(view.view_id)
-                .is_none());
+            assert!(
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(view.view_id)
+                    .is_none()
+            );
         });
 
         terminal.read(&app, |view, ctx| {
@@ -1127,10 +2406,12 @@ fn root_ambient_agent_pane_sets_root_ambient_agent_context_key() {
         let terminal = add_window_with_terminal(&mut app, None);
 
         terminal.read(&app, |view, ctx| {
-            assert!(!view
-                .keymap_context(ctx)
-                .set
-                .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY));
+            assert!(
+                !view
+                    .keymap_context(ctx)
+                    .set
+                    .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY)
+            );
         });
 
         terminal.update(&mut app, |view, ctx| {
@@ -1140,10 +2421,11 @@ fn root_ambient_agent_pane_sets_root_ambient_agent_context_key() {
         });
 
         terminal.read(&app, |view, ctx| {
-            assert!(view
-                .keymap_context(ctx)
-                .set
-                .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY));
+            assert!(
+                view.keymap_context(ctx)
+                    .set
+                    .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY)
+            );
         });
 
         terminal.update(&mut app, |view, ctx| {
@@ -1153,10 +2435,12 @@ fn root_ambient_agent_pane_sets_root_ambient_agent_context_key() {
         });
 
         terminal.read(&app, |view, ctx| {
-            assert!(!view
-                .keymap_context(ctx)
-                .set
-                .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY));
+            assert!(
+                !view
+                    .keymap_context(ctx)
+                    .set
+                    .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY)
+            );
         });
     });
 }
@@ -1194,8 +2478,8 @@ fn test_clear_session_flag_state() {
     use warp_terminal::shell::ShellType;
 
     use crate::ai::blocklist::SerializedBlockListItem;
-    use crate::terminal::model::block::SerializedBlock;
     use crate::terminal::ShellHost;
+    use crate::terminal::model::block::SerializedBlock;
 
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -1262,9 +2546,11 @@ fn test_clear_session_flag_state() {
 }
 
 fn assert_block_has_find_match(find_model: &TerminalFindModel, block_index: BlockIndex) {
-    assert!(find_model
-        .block_list_find_run()
-        .is_some_and(|run| run.matches_for_block(block_index).next().is_some()));
+    assert!(
+        find_model
+            .block_list_find_run()
+            .is_some_and(|run| run.matches_for_block(block_index).next().is_some())
+    );
 }
 
 impl TerminalView {
@@ -2115,10 +3401,12 @@ fn test_stable_scrolling_during_grid_truncation() {
                 // Create a dummy, finished block and a long-running block.
                 model.simulate_block("ls", "foo");
                 model.simulate_long_running_block("cat", "");
-                assert!(model
-                    .block_list()
-                    .active_block()
-                    .is_active_and_long_running());
+                assert!(
+                    model
+                        .block_list()
+                        .active_block()
+                        .is_active_and_long_running()
+                );
 
                 // Add enough newlines so that the long-running block spans at
                 // least the viewport and surely exceeds the grid size.
@@ -3881,12 +5169,13 @@ fn inline_agent_view_exits_when_tagged_in_long_running_command_is_tagged_out() {
                 .set_is_agent_tagged_in(true);
 
             assert!(view.agent_view_controller().as_ref(ctx).is_inline());
-            assert!(view
-                .model
-                .lock()
-                .block_list()
-                .active_block()
-                .is_agent_tagged_in());
+            assert!(
+                view.model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .is_agent_tagged_in()
+            );
 
             let model = view.model.lock();
             assert!(view.is_input_box_visible(&model, ctx));
@@ -4084,10 +5373,12 @@ fn use_agent_footer_renders_for_transfer_handoff_even_when_user_command_footer_s
                 let model = view.model.lock();
                 assert!(!view.should_render_use_agent_footer(&model, ctx));
                 let active_block_index = model.block_list().active_block_index();
-                assert!(model
-                    .block_list()
-                    .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
-                    .is_none());
+                assert!(
+                    model
+                        .block_list()
+                        .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
+                        .is_none()
+                );
             }
 
             let conversation_id = view.agent_view_controller().update(ctx, |controller, ctx| {
@@ -5319,18 +6610,20 @@ fn ctrl_c_does_not_accept_prompt_suggestion_banner() {
                 ctx,
             );
 
-            assert!(view
-                .inline_banners_state
-                .prompt_suggestions_banner
-                .is_some());
+            assert!(
+                view.inline_banners_state
+                    .prompt_suggestions_banner
+                    .is_some()
+            );
 
             // Ctrl-C should not accept the prompt suggestion.
             view.handle_action(&TerminalAction::CtrlC, ctx);
 
-            assert!(view
-                .inline_banners_state
-                .prompt_suggestions_banner
-                .is_some());
+            assert!(
+                view.inline_banners_state
+                    .prompt_suggestions_banner
+                    .is_some()
+            );
         });
     })
 }
@@ -5414,11 +6707,12 @@ fn linear_deeplink_does_not_auto_submit_when_already_in_agent_view() {
         });
 
         terminal.read(&app, |view, ctx| {
-            assert!(view
-                .agent_view_controller()
-                .as_ref(ctx)
-                .agent_view_state()
-                .is_fullscreen());
+            assert!(
+                view.agent_view_controller()
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .is_fullscreen()
+            );
         });
 
         // Now dispatch the Linear deeplink while already in fullscreen agent view.
@@ -5523,8 +6817,8 @@ fn linear_deeplink_via_default_entrypoint_does_not_auto_submit_in_fullscreen() {
 // 不需要构造 TerminalView / ctx。skim 算法的 Unicode 处理由 fuzzy_match
 // crate 负责,这里只验证我们在 view.rs 中对它的使用是否符合预期。
 
-use super::filter_and_sort_onekey_candidates;
 use super::OnekeyMenuRows;
+use super::filter_and_sort_onekey_candidates;
 
 fn rows_indices(rows: OnekeyMenuRows) -> Vec<usize> {
     match rows {

@@ -15,11 +15,30 @@ use mio::{self, Events, Interest};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use crate::terminal::{
-    event_listener::ChannelEventListener, local_tty, model::ansi, TerminalModel,
+    TerminalModel, event_listener::ChannelEventListener, local_tty, model::ansi,
 };
-use crate::terminal::{model::terminal_model::ExitReason, writeable_pty::Message};
+use crate::terminal::{
+    event::Event as TerminalEvent,
+    model::terminal_model::ExitReason,
+    writeable_pty::Message,
+    zmodem::{
+        PendingZmodemSession, ZmodemDetector, ZmodemDetectorResult, ZmodemDirection, ZmodemEvent,
+        ZmodemSession, ZmodemTransferPaths, zmodem_error_event,
+    },
+};
 
 use super::mio_channel::Receiver;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WriteSource {
+    UserInput,
+    Zmodem,
+}
+
+struct PendingWrite {
+    source: WriteSource,
+    bytes: Cow<'static, [u8]>,
+}
 
 /// The size of the buffer to read data into from the PTY.
 const READ_BUFFER_SIZE: usize = 0x4_0000;
@@ -52,7 +71,8 @@ pub struct EventLoop<T: local_tty::EventedPty> {
 
 /// Helper type which tracks how much of a buffer has been written.
 struct Writing {
-    source: Cow<'static, [u8]>,
+    source: WriteSource,
+    bytes: Cow<'static, [u8]>,
     written: usize,
 }
 
@@ -61,9 +81,11 @@ struct Writing {
 /// Contains list of items to write, current write state, etc. Anything that
 /// would otherwise be mutated on the `EventLoop` goes here.
 pub struct State {
-    write_list: VecDeque<Cow<'static, [u8]>>,
+    write_list: VecDeque<PendingWrite>,
     writing: Option<Writing>,
     parser: ansi::Processor,
+    zmodem: ZmodemState,
+    zmodem_detector: ZmodemDetector,
 }
 
 impl Default for State {
@@ -72,8 +94,16 @@ impl Default for State {
             write_list: VecDeque::new(),
             parser: ansi::Processor::new(),
             writing: None,
+            zmodem: ZmodemState::Inactive,
+            zmodem_detector: ZmodemDetector::default(),
         }
     }
+}
+
+enum ZmodemState {
+    Inactive,
+    Pending(PendingZmodemSession),
+    Active(ZmodemSession),
 }
 
 impl State {
@@ -107,9 +137,10 @@ impl State {
 
 impl Writing {
     #[inline]
-    fn new(c: Cow<'static, [u8]>) -> Writing {
+    fn new(pending: PendingWrite) -> Writing {
         Writing {
-            source: c,
+            source: pending.source,
+            bytes: pending.bytes,
             written: 0,
         }
     }
@@ -121,17 +152,22 @@ impl Writing {
 
     #[inline]
     fn remaining_bytes(&self) -> &[u8] {
-        &self.source[self.written..]
+        &self.bytes[self.written..]
     }
 
     #[inline]
     fn finished(&self) -> bool {
-        self.written >= self.source.len()
+        self.written >= self.bytes.len()
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.bytes.len()
     }
 }
 
 enum ChannelResult {
-    Continue,
+    Continue { should_try_write: bool },
     TerminateLoop { child_exited: bool },
 }
 
@@ -159,26 +195,294 @@ where
     ///
     /// Returns `false` when a shutdown message was received.
     fn drain_recv_channel(&mut self, state: &mut State) -> ChannelResult {
+        let mut should_try_write = false;
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
-                Message::Input(input) => state.write_list.push_back(input),
+                Message::Input(input) => {
+                    state.write_list.push_back(PendingWrite {
+                        source: WriteSource::UserInput,
+                        bytes: input,
+                    });
+                    should_try_write = true;
+                }
+                Message::ZmodemTransferPaths(paths) => {
+                    self.handle_zmodem_paths(state, paths);
+                    should_try_write = true;
+                }
+                Message::AbortZmodemSilently => {
+                    Self::abort_zmodem_silently(state);
+                    should_try_write = true;
+                }
                 Message::Shutdown => {
                     return ChannelResult::TerminateLoop {
                         child_exited: false,
-                    }
+                    };
                 }
                 Message::Resize(size) => self.pty.on_resize(&size),
                 Message::ChildExited => return ChannelResult::TerminateLoop { child_exited: true },
             }
         }
 
-        ChannelResult::Continue
+        ChannelResult::Continue { should_try_write }
     }
 
     /// Returns a `bool` indicating whether or not the event loop should continue running.
     #[inline]
     fn channel_event(&mut self, state: &mut State) -> ChannelResult {
         self.drain_recv_channel(state)
+    }
+
+    fn emit_zmodem_event(&self, event: ZmodemEvent) {
+        self.event_listener
+            .send_terminal_event(TerminalEvent::Zmodem(event));
+    }
+
+    fn queue_zmodem_wire(state: &mut State, bytes: Vec<u8>) {
+        if !bytes.is_empty() {
+            log::debug!("ZMODEM queueing {} byte(s) for PTY write", bytes.len());
+            state.write_list.push_back(PendingWrite {
+                source: WriteSource::Zmodem,
+                bytes: Cow::Owned(bytes),
+            });
+        }
+    }
+
+    fn discard_queued_zmodem_writes(state: &mut State) {
+        state
+            .write_list
+            .retain(|pending| pending.source != WriteSource::Zmodem);
+        if state
+            .writing
+            .as_ref()
+            .is_some_and(|writing| writing.source == WriteSource::Zmodem)
+        {
+            state.writing = None;
+        }
+    }
+
+    fn abort_zmodem_silently(state: &mut State) {
+        let previous = std::mem::replace(&mut state.zmodem, ZmodemState::Inactive);
+        match previous {
+            ZmodemState::Pending(pending) => {
+                log::debug!(
+                    "ZMODEM silently aborting pending {:?} transfer",
+                    pending.direction()
+                );
+                Self::discard_queued_zmodem_writes(state);
+                Self::queue_zmodem_wire(state, pending.cancel());
+            }
+            ZmodemState::Active(session) => {
+                let direction = session.direction();
+                log::debug!("ZMODEM silently aborting active {direction:?} transfer");
+                Self::discard_queued_zmodem_writes(state);
+                Self::queue_zmodem_wire(state, session.cancel());
+            }
+            ZmodemState::Inactive => {}
+        }
+        state.zmodem_detector.take_pending_ordinary();
+    }
+
+    fn fail_zmodem(
+        &self,
+        state: &mut State,
+        direction: Option<ZmodemDirection>,
+        err: impl std::fmt::Display,
+    ) {
+        self.emit_zmodem_event(zmodem_error_event(direction, err));
+        state.zmodem = ZmodemState::Inactive;
+    }
+
+    fn handle_zmodem_paths(&mut self, state: &mut State, paths: ZmodemTransferPaths) {
+        log::info!(
+            "PTY event loop received ZMODEM {:?} path selection: path_count={}",
+            paths.direction,
+            paths.paths.len()
+        );
+        let previous = std::mem::replace(&mut state.zmodem, ZmodemState::Inactive);
+        let pending = match previous {
+            ZmodemState::Pending(pending) => pending,
+            ZmodemState::Active(session) if paths.paths.is_empty() => {
+                let direction = session.direction();
+                Self::discard_queued_zmodem_writes(state);
+                Self::queue_zmodem_wire(state, session.cancel());
+                log::debug!("ZMODEM cancelling active {direction:?} transfer");
+                self.emit_zmodem_event(ZmodemEvent::Cancelled { direction });
+                return;
+            }
+            other => {
+                state.zmodem = other;
+                if paths.paths.is_empty() {
+                    self.emit_zmodem_event(ZmodemEvent::Cancelled {
+                        direction: paths.direction,
+                    });
+                    return;
+                }
+                self.emit_zmodem_event(ZmodemEvent::Failed {
+                    direction: Some(paths.direction),
+                    message: "ZMODEM session is no longer active".to_string(),
+                });
+                return;
+            }
+        };
+
+        if paths.paths.is_empty() {
+            let direction = pending.direction();
+            Self::discard_queued_zmodem_writes(state);
+            Self::queue_zmodem_wire(state, pending.cancel());
+            log::debug!("ZMODEM cancelling pending {direction:?} transfer");
+            self.emit_zmodem_event(ZmodemEvent::Cancelled { direction });
+            return;
+        }
+
+        let direction = pending.direction();
+        match pending.start(paths) {
+            Ok(session) => {
+                log::info!("ZMODEM starting {direction:?} transfer from selected paths");
+                state.zmodem = ZmodemState::Active(session);
+                let trailing_output = self.drain_zmodem_actions(state);
+                let ordinary_output =
+                    Self::process_pty_bytes(&self.event_listener, state, &trailing_output);
+                self.parse_ordinary_output(state, &ordinary_output);
+            }
+            Err(err) => self.fail_zmodem(state, Some(direction), err),
+        }
+    }
+
+    fn drain_zmodem_actions(&self, state: &mut State) -> Vec<u8> {
+        let (direction, wire_bytes, events, result) = {
+            let ZmodemState::Active(session) = &mut state.zmodem else {
+                return Vec::new();
+            };
+            let direction = session.direction();
+            let mut wire_bytes = Vec::new();
+            let mut events = Vec::new();
+            let result =
+                session.drain_actions(|bytes| wire_bytes.extend(bytes), |event| events.push(event));
+            (direction, wire_bytes, events, result)
+        };
+
+        Self::queue_zmodem_wire(state, wire_bytes);
+        for event in events {
+            self.emit_zmodem_event(event);
+        }
+        match result {
+            Ok(true) => {
+                let trailing_output = match &mut state.zmodem {
+                    ZmodemState::Active(session) => session.take_input(),
+                    ZmodemState::Inactive | ZmodemState::Pending(_) => Vec::new(),
+                };
+                state.zmodem = ZmodemState::Inactive;
+                return trailing_output;
+            }
+            Ok(false) => {}
+            Err(err) => self.fail_zmodem(state, Some(direction), err),
+        }
+        Vec::new()
+    }
+
+    fn process_pty_bytes(
+        event_listener: &ChannelEventListener,
+        state: &mut State,
+        bytes: &[u8],
+    ) -> Vec<u8> {
+        match &mut state.zmodem {
+            ZmodemState::Inactive => {
+                if warp_core::features::FeatureFlag::Lrzsz.is_enabled() {
+                    match state.zmodem_detector.push(bytes) {
+                        ZmodemDetectorResult::Detected {
+                            detection,
+                            ordinary_output,
+                            zmodem_input,
+                        } => {
+                            log::debug!(
+                                "ZMODEM detected {:?} session: zmodem_input_len={}, ordinary_len={}",
+                                detection.direction,
+                                zmodem_input.len(),
+                                ordinary_output.len()
+                            );
+                            state.zmodem = ZmodemState::Pending(PendingZmodemSession::new(
+                                detection.direction,
+                                &zmodem_input,
+                            ));
+                            let event = match detection.direction {
+                                ZmodemDirection::Upload => ZmodemEvent::UploadRequested,
+                                ZmodemDirection::Download => {
+                                    ZmodemEvent::DownloadDirectoryRequested
+                                }
+                            };
+                            event_listener.send_terminal_event(TerminalEvent::Zmodem(event));
+                            return ordinary_output;
+                        }
+                        ZmodemDetectorResult::Ordinary(ordinary_output) => {
+                            return ordinary_output;
+                        }
+                    }
+                }
+                let mut ordinary_output = state.zmodem_detector.take_pending_ordinary();
+                ordinary_output.extend_from_slice(bytes);
+                ordinary_output
+            }
+            ZmodemState::Pending(pending) => {
+                log::debug!(
+                    "ZMODEM buffering pending {:?} input: len={}",
+                    pending.direction(),
+                    bytes.len()
+                );
+                pending.append_input(bytes);
+                Vec::new()
+            }
+            ZmodemState::Active(session) => {
+                let (direction, wire_bytes, events, result) = {
+                    session.append_input(bytes);
+                    let direction = session.direction();
+                    log::debug!(
+                        "ZMODEM active {direction:?} received PTY bytes: len={}",
+                        bytes.len()
+                    );
+                    let mut wire_bytes = Vec::new();
+                    let mut events = Vec::new();
+                    let result = session.drain_actions(
+                        |bytes| wire_bytes.extend(bytes),
+                        |event| events.push(event),
+                    );
+                    (direction, wire_bytes, events, result)
+                };
+                Self::queue_zmodem_wire(state, wire_bytes);
+                for event in events {
+                    event_listener.send_terminal_event(TerminalEvent::Zmodem(event));
+                }
+                match result {
+                    Ok(true) => {
+                        let trailing_output = match &mut state.zmodem {
+                            ZmodemState::Active(session) => session.take_input(),
+                            ZmodemState::Inactive | ZmodemState::Pending(_) => Vec::new(),
+                        };
+                        state.zmodem = ZmodemState::Inactive;
+                        return Self::process_pty_bytes(event_listener, state, &trailing_output);
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        event_listener.send_terminal_event(TerminalEvent::Zmodem(
+                            zmodem_error_event(Some(direction), err),
+                        ));
+                        state.zmodem = ZmodemState::Inactive;
+                    }
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    fn parse_ordinary_output(&mut self, state: &mut State, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        let mut terminal = self.terminal.lock();
+        state
+            .parser
+            .parse_bytes(terminal.deref_mut(), bytes, self.pty.writer());
+        self.event_listener.send_wakeup_event();
     }
 
     /// Reads from the pty into the provided buffer, using the provided state
@@ -197,9 +501,8 @@ where
         can_read: &mut bool,
     ) -> io::Result<()> {
         let mut bytes_in_buffer = 0;
+        let mut ordinary_output = Vec::new();
         let mut bytes_processed = 0;
-
-        let mut terminal = None;
 
         // We read up to sizeof(buf) to limit the amount of time spent
         // reading from the PTY for a given event. Currently, the buf
@@ -231,36 +534,44 @@ where
                 },
             }
 
-            let terminal = match &mut terminal {
-                Some(terminal) => terminal,
-                None => terminal.insert(match self.terminal.try_lock() {
-                    // If we've filled up the buffer, block on locking the terminal.
-                    None if bytes_in_buffer >= READ_BUFFER_SIZE => self.terminal.lock(),
-                    // Otherwise, if we failed to acquire the lock, try to read more
-                    // data into the buffer.
-                    None => continue,
-                    // Finally, if we acquired the lock, make use of it.
-                    Some(terminal) => terminal,
-                }),
-            };
-
-            // Process the bytes read into the buffer.
-            state.parser.parse_bytes(
-                terminal.deref_mut(),
-                &buf[..bytes_in_buffer],
-                &mut self.pty.writer(),
-            );
-
-            bytes_processed += bytes_in_buffer;
+            let parsed_output =
+                Self::process_pty_bytes(&self.event_listener, state, &buf[..bytes_in_buffer]);
+            ordinary_output.extend(parsed_output);
             bytes_in_buffer = 0;
+
+            if !ordinary_output.is_empty() {
+                let should_block_for_lock = ordinary_output.len() >= READ_BUFFER_SIZE;
+                let terminal = if should_block_for_lock {
+                    Some(self.terminal.lock())
+                } else {
+                    self.terminal.try_lock()
+                };
+
+                let Some(mut terminal) = terminal else {
+                    continue;
+                };
+
+                let parsed_len = ordinary_output.len();
+                state
+                    .parser
+                    .parse_bytes(terminal.deref_mut(), &ordinary_output, self.pty.writer());
+                ordinary_output.clear();
+                bytes_processed += parsed_len;
+                FairMutexGuard::bump(&mut terminal);
+            }
 
             if bytes_processed >= MAX_LOCKED_READ {
                 break;
             }
+        }
 
-            // Give up the lock to a waiting thread, if any, before reading
-            // more bytes from the PTY.
-            FairMutexGuard::bump(terminal);
+        if !ordinary_output.is_empty() {
+            let parsed_len = ordinary_output.len();
+            let mut terminal = self.terminal.lock();
+            state
+                .parser
+                .parse_bytes(terminal.deref_mut(), &ordinary_output, self.pty.writer());
+            bytes_processed += parsed_len;
         }
 
         // Queue a terminal redraw if we processed some number
@@ -280,6 +591,13 @@ where
             'write_one: loop {
                 match self.pty.writer().write(current.remaining_bytes()) {
                     Ok(0) => {
+                        if current.source == WriteSource::Zmodem {
+                            log::debug!(
+                                "ZMODEM PTY write accepted 0 byte(s) after {}/{} byte(s)",
+                                current.written,
+                                current.len()
+                            );
+                        }
                         state.set_current(Some(current));
                         // We never attempt to write an empty buffer, so if we
                         // get 0 here, it means the object is unable to receive
@@ -288,24 +606,47 @@ where
                         break 'write_many;
                     }
                     Ok(n) => {
+                        if current.source == WriteSource::Zmodem {
+                            log::debug!(
+                                "ZMODEM wrote {n} byte(s) to PTY ({}/{} total)",
+                                current.written + n,
+                                current.len()
+                            );
+                        }
                         current.advance(n);
                         if current.finished() {
+                            if current.source == WriteSource::Zmodem {
+                                log::debug!(
+                                    "ZMODEM finished writing {} byte(s) to PTY",
+                                    current.len()
+                                );
+                            }
                             state.goto_next();
                             break 'write_one;
                         }
                     }
-                    Err(err) => {
-                        state.set_current(Some(current));
-                        match err.kind() {
-                            ErrorKind::Interrupted | ErrorKind::WouldBlock => {
-                                if err.kind() == ErrorKind::WouldBlock {
-                                    *can_write = false;
+                    Err(err) => match err.kind() {
+                        ErrorKind::Interrupted | ErrorKind::WouldBlock => {
+                            if err.kind() == ErrorKind::WouldBlock {
+                                if current.source == WriteSource::Zmodem {
+                                    let written = current.written;
+                                    let len = current.len();
+                                    log::debug!(
+                                        "ZMODEM PTY write would block after {}/{} byte(s)",
+                                        written,
+                                        len
+                                    );
                                 }
-                                break 'write_many;
+                                *can_write = false;
                             }
-                            _ => return Err(err),
+                            state.set_current(Some(current));
+                            break 'write_many;
                         }
-                    }
+                        _ => {
+                            state.set_current(Some(current));
+                            return Err(err);
+                        }
+                    },
                 }
             }
         }
@@ -379,7 +720,11 @@ where
                         match event.token() {
                             token if token == CHANNEL_TOKEN => {
                                 match self.channel_event(&mut state) {
-                                    ChannelResult::Continue => {}
+                                    ChannelResult::Continue { should_try_write } => {
+                                        if should_try_write && state.needs_write() {
+                                            can_write = true;
+                                        }
+                                    }
                                     ChannelResult::TerminateLoop {
                                         child_exited: exited,
                                     } => {
@@ -434,7 +779,11 @@ where
                     while can_read || (state.needs_write() && can_write) {
                         if can_read {
                             match self.pty_read(&mut state, &mut buf, &mut can_read) {
-                                Ok(_) => {}
+                                Ok(_) => {
+                                    if state.needs_write() {
+                                        can_write = true;
+                                    }
+                                }
                                 Err(err) => {
                                     // On Linux, a `read` on the master side of a PTY can fail
                                     // with `EIO` if the client side hangs up.  In that case,
@@ -478,3 +827,7 @@ where
             .expect("thread spawn works")
     }
 }
+
+#[cfg(test)]
+#[path = "event_loop_tests.rs"]
+mod tests;
