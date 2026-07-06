@@ -17,14 +17,46 @@ pub fn extract_tool_calls_from_assistant_text(
     available_tool_names: &[String],
 ) -> Vec<ToolCall> {
     let allowed: HashSet<&str> = available_tool_names.iter().map(String::as_str).collect();
-    let mut out = Vec::new();
+    let mut candidates = Vec::new();
     for candidate in collect_json_candidates(text) {
-        if let Some(call) = parse_tool_call_value(&candidate, &allowed) {
-            out.push(call);
-            break;
+        for expanded in expand_tool_call_values(&candidate) {
+            if let Some(call) = parse_tool_call_value(&expanded, &allowed) {
+                candidates.push(call);
+            }
         }
     }
-    out
+    pick_best_tool_call(candidates)
+}
+
+fn expand_tool_call_values(value: &Value) -> Vec<Value> {
+    if let Some(items) = value.get("tool_calls").and_then(Value::as_array) {
+        return items.to_vec();
+    }
+    vec![value.clone()]
+}
+
+/// Prefer `run_shell_command` when the model emits multiple pseudo-tools in one
+/// response (common: wrong `webfetch` first, then correct shell JSON).
+fn pick_best_tool_call(candidates: Vec<ToolCall>) -> Vec<ToolCall> {
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    if let Some(call) = candidates
+        .iter()
+        .find(|call| call.fn_name == "run_shell_command")
+    {
+        return vec![call.clone()];
+    }
+    candidates.last().cloned().into_iter().collect()
+}
+
+/// Returns true when `text` is (or contains) tool-call-shaped JSON that local models
+/// emit as markdown/prose instead of native `tool_calls`. Used to omit these blobs
+/// from Ollama outbound history when structured ToolCall messages follow.
+pub fn contains_tool_shaped_json(text: &str) -> bool {
+    collect_json_candidates(text)
+        .iter()
+        .any(|candidate| extract_name_and_args(candidate).is_some())
 }
 
 fn collect_json_candidates(text: &str) -> Vec<Value> {
@@ -127,21 +159,40 @@ fn parse_tool_call_value(value: &Value, allowed: &HashSet<&str>) -> Option<ToolC
 fn extract_name_and_args(value: &Value) -> Option<(String, Value)> {
     let obj = value.as_object()?;
     if obj.get("type").and_then(Value::as_str) == Some("function") {
+        if let Some(function) = obj.get("function").and_then(Value::as_object) {
+            let name = function.get("name")?.as_str()?.to_owned();
+            let args = function
+                .get("arguments")
+                .or_else(|| function.get("parameters"))
+                .cloned()
+                .unwrap_or(Value::Object(Default::default()));
+            return Some((name, coerce_args_value(args)));
+        }
         let name = obj.get("name")?.as_str()?.to_owned();
         let args = obj
             .get("parameters")
             .or_else(|| obj.get("arguments"))
             .cloned()
             .unwrap_or(Value::Object(Default::default()));
-        return Some((name, args));
+        return Some((name, coerce_args_value(args)));
     }
     let name = obj.get("name")?.as_str()?.to_owned();
     let args = obj
         .get("arguments")
         .or_else(|| obj.get("parameters"))
+        .or_else(|| obj.get("input"))
         .cloned()
         .unwrap_or(Value::Object(Default::default()));
-    Some((name, args))
+    Some((name, coerce_args_value(args)))
+}
+
+fn coerce_args_value(args: Value) -> Value {
+    if let Some(raw) = args.as_str() {
+        if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
+            return parsed;
+        }
+    }
+    args
 }
 
 fn normalize_tool_call(raw_name: String, args: Value) -> Option<(String, Value)> {
@@ -154,17 +205,52 @@ fn normalize_tool_call(raw_name: String, args: Value) -> Option<(String, Value)>
             if args.get("command_id").is_some() {
                 return Some((raw_name, args));
             }
-            if let Some(command) = args.get("command").and_then(Value::as_str) {
-                return Some((
-                    "run_shell_command".to_owned(),
-                    shell_command_args(command.to_owned()),
-                ));
+            remap_shell_from_command_arg(args)
+        }
+        "run_code_command" | "run_command" | "execute_command" | "shell_command"
+        | "execute_shell_command" | "run_shell" | "shell" | "bash" | "terminal_command" => {
+            remap_shell_from_command_arg(args)
+        }
+        name if super::tools::lookup(name).is_some() => {
+            if name == "run_shell_command" {
+                if let Some(command) = args.get("command").and_then(Value::as_str) {
+                    return Some((raw_name, shell_command_args(command.to_owned())));
+                }
+                if args.is_string() {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(args.as_str().unwrap_or("")) {
+                        if let Some(command) = parsed.get("command").and_then(Value::as_str) {
+                            return Some((
+                                raw_name,
+                                shell_command_args(command.to_owned()),
+                            ));
+                        }
+                    }
+                }
+            }
+            Some((raw_name, args))
+        }
+        _ => {
+            // Local models invent tool names but often include a shell `command` field.
+            if args.get("command_id").is_none() {
+                if let Some((name, args)) = remap_shell_from_command_arg(args) {
+                    return Some((name, args));
+                }
             }
             None
         }
-        name if super::tools::lookup(name).is_some() => Some((raw_name, args)),
-        _ => None,
     }
+}
+
+fn remap_shell_from_command_arg(args: Value) -> Option<(String, Value)> {
+    if let Some(command) = args.get("command").and_then(Value::as_str) {
+        if !command.is_empty() {
+            return Some((
+                "run_shell_command".to_owned(),
+                shell_command_args(command.to_owned()),
+            ));
+        }
+    }
+    None
 }
 
 fn echo_args_to_command(args: &Value) -> Option<String> {

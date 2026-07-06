@@ -1310,6 +1310,12 @@ fn build_chat_request(
     // `unexpected tool_use_id ... no corresponding tool_use block`。
     let mut skipped_subagent_call_ids: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    let history_has_tool_call = all_msgs.iter().any(|msg| {
+        matches!(
+            msg.message,
+            Some(api::message::Message::ToolCall(_))
+        )
+    });
 
     for (idx, msg) in all_msgs.iter().enumerate() {
         // 摘要请求:tail 区间不送上游(只送 head + 末尾追加 SUMMARY_TEMPLATE)
@@ -1400,6 +1406,15 @@ fn build_chat_request(
                 }
             }
             api::message::Message::AgentOutput(a) => {
+                // Ollama 本地模型常把 tool JSON 当 AgentOutput 文本落地;同一轮后面还有
+                // 结构化 ToolCall + ToolCallResult。再发给上游会淹没真实摘要,导致 C3 失忆。
+                // 仅在已成功落地结构化 ToolCall 时剥离 JSON 文本,避免提取失败时 C3 历史被掏空。
+                if api_type == AgentProviderApiType::Ollama
+                    && history_has_tool_call
+                    && super::content_tool_calls::contains_tool_shaped_json(&a.text)
+                {
+                    continue;
+                }
                 if buf.text.is_some() || !buf.tool_calls.is_empty() {
                     flush_assistant_buffer(&mut buf, &mut messages, &mut outbound_tool_groups);
                 }
@@ -3965,9 +3980,11 @@ pub async fn generate_byop_output(
                 break;
             }
             if tool_bufs.is_empty() && parsed_any_text {
+                let preview: String = streamed_assistant_text.chars().take(240).collect();
                 log::info!(
                     "[byop] content_tool_extract: no tools parsed \
-                     (streamed={}B captured={}B reasoning_streamed={}B reasoning_captured={}B)",
+                     (streamed={}B captured={}B reasoning_streamed={}B reasoning_captured={}B) \
+                     preview={preview:?}",
                     streamed_assistant_text.len(),
                     captured_assistant_text.as_ref().map(|t| t.len()).unwrap_or(0),
                     streamed_reasoning_text.len(),
