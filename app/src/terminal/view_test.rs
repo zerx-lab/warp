@@ -446,6 +446,52 @@ fn restores_cli_subagent_terminal_output_from_persisted_snapshot() {
 }
 
 #[test]
+fn restores_cli_subagent_snapshot_when_history_blocks_are_not_preloaded() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let conversation_id = AIConversationId::new();
+        let block_id = BlockId::from("cli-block-missing-preload".to_string());
+        let task_id = TaskId::new("cli-task-missing-preload".to_string());
+        let conversation = build_restored_conversation_with_cli_subagent_snapshot_for_test(
+            conversation_id,
+            block_id.clone(),
+            task_id,
+            b"ssh jump\r\ndocker ps -a\r\nanalyzer-runtime\r\n",
+        );
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            // 历史列表进入已有 terminal 时不会像新 pane 初始化那样预置 restored blocks；
+            // restore_conversation_after_view_creation 必须自己补回 CLI subagent 的终端快照。
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(conversation),
+                true,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.cli_subagent_views.contains_key(&block_id),
+                "未预置 restored blocks 时也应恢复 CLI subagent 只读卡片"
+            );
+            let model = view.model.lock();
+            let block = model
+                .block_list()
+                .block_with_id(&block_id)
+                .expect("CLI subagent snapshot block should be restored into the terminal model");
+            let serialized_block = SerializedBlock::from(block);
+            let output = String::from_utf8_lossy(&serialized_block.stylized_output);
+            assert!(
+                output.contains("analyzer-runtime"),
+                "历史入口恢复时应显示持久化的 SSH 终端输出: {output}"
+            );
+        });
+    });
+}
+
+#[test]
 fn exiting_restored_cli_subagent_agent_view_inserts_entry_card() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

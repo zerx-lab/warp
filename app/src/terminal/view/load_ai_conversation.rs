@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use crate::ai::blocklist::agent_view::{
 use crate::ai::blocklist::block::cli::CLISubagentViewMode;
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
 use crate::ai::blocklist::history_model::{CLIAgentConversation, LoadedConversationData};
-use crate::ai::blocklist::BlocklistAIContextModel;
+use crate::ai::blocklist::{BlocklistAIContextModel, SerializedBlockListItem};
 use crate::terminal::input::message_bar::Message as InputMessage;
 use crate::terminal::input::message_bar::MessageItem;
 use crate::terminal::model::block::SerializedBlock;
@@ -309,6 +310,40 @@ impl TerminalView {
             .insert_restored_block(&block);
     }
 
+    fn restore_missing_cli_subagent_blocks_for_conversation(
+        &mut self,
+        conversation: &AIConversation,
+    ) {
+        let cli_subagent_block_ids = conversation
+            .all_tasks()
+            .filter(|task| task.is_cli_subagent())
+            .filter_map(|task| task.cli_subagent_block_id())
+            .collect::<HashSet<_>>();
+        if cli_subagent_block_ids.is_empty() {
+            return;
+        }
+
+        // 历史列表进入已有 terminal 时不会预先把 conversation 的 block 快照塞进
+        // TerminalModel；这里只补 CLI subagent 持久化快照，避免普通历史命令重复出现。
+        let serialized_blocks = conversation.to_serialized_blocklist_items();
+        let mut terminal_model = self.model.lock();
+        for item in serialized_blocks {
+            let SerializedBlockListItem::Command { block } = item;
+            if !cli_subagent_block_ids.contains(&block.id)
+                || terminal_model
+                    .block_list()
+                    .block_with_id(&block.id)
+                    .is_some()
+            {
+                continue;
+            }
+
+            terminal_model
+                .block_list_mut()
+                .insert_restored_block(&block);
+        }
+    }
+
     /// Get AIConversations to restore given conversation IDs.
     pub(super) fn get_conversations_to_restore(
         conversation_ids: &[AIConversationId],
@@ -587,6 +622,7 @@ impl TerminalView {
             conversation_id
         );
         let conversation_for_cli_subagent_restore = restored.ai_conversation.clone();
+        self.restore_missing_cli_subagent_blocks_for_conversation(&restored.ai_conversation);
 
         // Calculate height for AI blocks
         let size_info = *self.size_info;
