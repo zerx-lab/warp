@@ -133,10 +133,8 @@ struct CliSubagentBlockSnapshot {
 }
 
 impl CliSubagentBlockSnapshot {
-    fn new(task_id: TaskId, mut block: SerializedBlock) -> Self {
+    fn new(task_id: TaskId, block: SerializedBlock) -> Self {
         let block_id = block.id.clone();
-        // 以快照 key 为准，避免后续恢复时 block.id 与索引不一致。
-        block.id = block_id.clone();
         Self {
             task_id,
             block_id,

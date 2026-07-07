@@ -5460,8 +5460,11 @@ impl TerminalView {
                 }
             }
             CLISubagentEvent::ToggledHideResponses => {}
-            CLISubagentEvent::UpdatedLastSnapshot { block_id } => {
-                self.persist_cli_subagent_block_snapshot(block_id, None, None, None, ctx);
+            CLISubagentEvent::UpdatedLastSnapshot { .. } => {
+                // 仅更新内存中的 last_snapshot_at（已在 controller 内完成），
+                // 不触发全量落盘。落盘由低频的 SpawnedSubagent / FinishedSubagent 承担，
+                // 避免 BlockCompleted 时 UpdatedLastSnapshot 与紧随其后的 FinishedSubagent
+                // 连续两次全量序列化整个 conversation 造成主线程写放大。
             }
             CLISubagentEvent::ControlHandedBackAfterTransfer => {
                 // Notify the shell command executor that control was handed back after transfer.

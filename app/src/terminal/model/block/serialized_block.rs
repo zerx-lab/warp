@@ -90,6 +90,16 @@ fn default_as_true() -> bool {
     true
 }
 
+/// `should_hide_block` 的序列化判定：仅当值为 `false`（可见）时写入 JSON。
+///
+/// 历史上该字段被无条件 `skip`，导致 CLI subagent 等需要保持可见的块在重启恢复后
+/// 被 `default = true` 误判为隐藏。这里收窄为「只持久化可见状态」：
+/// - `true`（隐藏，默认）：不序列化，反序列化走 `default_as_true`，与旧数据兼容。
+/// - `false`（可见）：序列化写入，恢复后保持可见。
+fn skip_hide_when_true(value: &bool) -> bool {
+    *value
+}
+
 /// Blocklist AI metadata associated with this block.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SerializedAIMetadata {
@@ -111,7 +121,7 @@ pub struct SerializedAIMetadata {
 
     /// `true` if this block should be hidden from the user (as is the case with AI-requested
     /// commands, for example).
-    #[serde(default = "default_as_true")]
+    #[serde(default = "default_as_true", skip_serializing_if = "skip_hide_when_true")]
     should_hide_block: bool,
 }
 
