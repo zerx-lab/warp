@@ -107,8 +107,9 @@ fn test_terminal_page_scroll_bindings_are_editable() {
 #[test]
 #[cfg(any(windows, target_os = "linux"))]
 fn test_windows_paste_custom_action_binds_to_plain_ctrl_v() {
+    let expected = Keystroke::parse("ctrl-v").expect("\"ctrl-v\" should be a valid keystroke");
     assert_eq!(
         custom_tag_to_keystroke(CustomAction::WindowsPaste.into()),
-        Keystroke::parse("ctrl-v").ok()
+        Some(expected)
     );
 }
