@@ -261,7 +261,7 @@ pub fn init(ctx: &mut AppContext) {
             EditorAction::Paste,
             id!("EditorView") & !id!("IMEOpen"),
         ),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         FixedBinding::custom(
             CustomAction::WindowsPaste,
             EditorAction::Paste,

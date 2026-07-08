@@ -10,6 +10,9 @@ use crate::{
     workspace::WorkspaceAction,
 };
 
+#[cfg(any(windows, target_os = "linux"))]
+use crate::util::bindings::{custom_tag_to_keystroke, CustomAction};
+
 #[test]
 fn test_keybinding_name_to_display_string() {
     App::test((), |mut app| async move {
@@ -96,4 +99,16 @@ fn test_terminal_page_scroll_bindings_are_editable() {
             assert_eq!(page_down, Keystroke::parse("pagedown").ok());
         });
     });
+}
+
+// Regression test for https://github.com/zerx-lab/zap/issues/303: `EditorView`'s default Paste
+// binding is `ctrl-shift-v` on non-Mac (see `cmd_or_ctrl_shift`), so Linux (like Windows) needs a
+// compensating plain `ctrl-v` binding via `CustomAction::WindowsPaste`.
+#[test]
+#[cfg(any(windows, target_os = "linux"))]
+fn test_windows_paste_custom_action_binds_to_plain_ctrl_v() {
+    assert_eq!(
+        custom_tag_to_keystroke(CustomAction::WindowsPaste.into()),
+        Keystroke::parse("ctrl-v").ok()
+    );
 }

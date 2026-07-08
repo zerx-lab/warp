@@ -112,7 +112,9 @@ pub enum CustomAction {
     NewPersonalNotebook,
     NewPersonalEnvVars,
     SearchDrive,
-    #[cfg(windows)]
+    // Also used on Linux: `EditorView` only binds Paste to `ctrl-shift-v` by default (see
+    // `cmd_or_ctrl_shift`), so Linux needs the same plain `ctrl-v` compensating binding as Windows.
+    #[cfg(any(windows, target_os = "linux"))]
     WindowsPaste,
     #[cfg(windows)]
     WindowsCopy,
@@ -263,7 +265,7 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         CustomAction::Cut => Keystroke::parse("cmdorctrl-x").ok(),
         CustomAction::Copy => Keystroke::parse(cmd_or_ctrl_shift("c")).ok(),
         CustomAction::Paste => Keystroke::parse(cmd_or_ctrl_shift("v")).ok(),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         CustomAction::WindowsPaste => Keystroke::parse("ctrl-v").ok(),
         #[cfg(windows)]
         CustomAction::WindowsCopy => Keystroke::parse("ctrl-c").ok(),
