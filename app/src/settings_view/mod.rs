@@ -17,7 +17,9 @@ use crate::{
     settings_view::mcp_servers_page::MCPServersSettingsPageEvent,
     terminal::{model::blockgrid::BlockGrid, SizeInfo},
     ui_components::icons,
-    util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction},
+    util::bindings::{
+        custom_tag_to_keystroke, keybinding_name_to_display_string, BindingGroup, CustomAction,
+    },
     view_components::ToastFlavor,
     workspace::WorkspaceAction,
     GlobalResourceHandlesProvider,
@@ -50,11 +52,11 @@ use warpify_page::{WarpifyPageAction, WarpifyPageView};
 use warpui::Element;
 use warpui::{
     elements::{
-        Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
-        ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        DispatchEventResult, Empty, EventHandler, Expanded, Fill, Flex, MainAxisSize,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
-        ScrollbarWidth, Shrinkable, Stack, Text,
+        get_rich_content_position_id, Align, Border, ChildAnchor, ChildView, Clipped,
+        ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
+        CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Expanded, Fill, Flex,
+        MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
+        SavePosition, ScrollbarWidth, Shrinkable, Stack, Text,
     },
     fonts::{Properties, Weight},
     id,
@@ -67,8 +69,8 @@ mod about_page;
 mod agent_providers_widget;
 mod ai_page;
 mod appearance_page;
-mod code_page;
 mod cloud_sync_page;
+mod code_page;
 mod directory_color_add_picker;
 mod execution_profile_view;
 mod features;
@@ -197,7 +199,6 @@ pub enum SettingsSection {
     // Zap Wave 7-3:`CloudEnvironments` 随 ambient-agent UI 子系统物理删。
 }
 
-use crate::util::bindings::custom_tag_to_keystroke;
 use std::fmt::{self, Display};
 
 impl Display for SettingsSection {
@@ -779,6 +780,9 @@ pub enum SettingsAction {
     ToggleMaximizePane,
     Close,
     OpenContextMenu(Vector2F),
+    EditorCut,
+    EditorCopy,
+    EditorPaste,
     FocusSelf,
     Up,
     Down,
@@ -942,6 +946,11 @@ pub struct SettingsView {
     clipped_scroll_state: ClippedScrollStateHandle,
     context_menu: ViewHandle<Menu<SettingsAction>>,
     context_menu_state: Option<Vector2F>,
+    /// Editor field captured as the context menu's edit target when the menu was opened, if the
+    /// right-click landed inside a focused `EditorView`'s bounds. Cut/Copy/Paste actions reuse
+    /// this handle instead of re-resolving focus at dispatch time, since a right-click never
+    /// focuses the field it lands on.
+    context_menu_editor: Option<ViewHandle<EditorView>>,
     /// Sidebar navigation items (pages + umbrellas).
     nav_items: Vec<SettingsNavItem>,
     /// Handle to the AI settings page, used to switch subpage modes.
@@ -1146,6 +1155,7 @@ impl SettingsView {
             clipped_scroll_state: Default::default(),
             context_menu,
             context_menu_state: Default::default(),
+            context_menu_editor: None,
             nav_items,
             ai_page_handle: ai_page_handle_for_nav,
             code_page_handle: code_page_handle_for_nav,
@@ -1378,8 +1388,107 @@ impl SettingsView {
         }
     }
 
+    fn focused_editor(&self, ctx: &ViewContext<Self>) -> Option<ViewHandle<EditorView>> {
+        let window_id = ctx.window_id();
+        let focused_id = ctx.focused_view_id(window_id)?;
+        // `view_with_id` already filters by `TypeId`, so it returns `None` on its own when the
+        // focused view isn't an `EditorView` -- no need to pre-check `ctx.view_name` first.
+        ctx.view_with_id(window_id, focused_id)
+    }
+
+    /// Resolves the `EditorView` a right-click at `position` should target as the context
+    /// menu's edit target, if any.
+    ///
+    /// A right-click never focuses the field it lands on (unlike a left-click), so
+    /// `focused_editor` may point at an unrelated field -- e.g. the search box -- while the user
+    /// actually right-clicked an unfocused API-key field. We only trust `focused_editor` as the
+    /// target when `position` falls inside that editor's last-painted bounds; otherwise we
+    /// offer no editing items rather than risk cutting/copying/pasting into the wrong field.
+    fn editor_at_position(
+        &self,
+        position: Vector2F,
+        ctx: &ViewContext<Self>,
+    ) -> Option<ViewHandle<EditorView>> {
+        let editor = self.focused_editor(ctx)?;
+        let bounds = ctx.element_position_by_id(get_rich_content_position_id(&editor.id()))?;
+        bounds.contains_point(position).then_some(editor)
+    }
+
+    fn editor_context_menu_items(
+        &self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<Vec<MenuItem<SettingsAction>>> {
+        // Use the handle captured when the menu was opened (see `SettingsAction::OpenContextMenu`)
+        // rather than re-resolving focus here, so the items shown always match the action target.
+        let editor = self.context_menu_editor.clone()?;
+        let (has_selection, can_edit, is_password) = editor.read(ctx, |editor, ctx| {
+            (
+                !editor.selected_text(ctx).is_empty(),
+                editor.can_edit(ctx),
+                editor.is_password(),
+            )
+        });
+
+        let mut items = Vec::new();
+        // Password fields (e.g. BYOP API keys) never expose Cut/Copy: `EditorView::cut`/
+        // `EditorView::copy` are silent no-ops for them, so keep the menu consistent and only
+        // offer Paste.
+        if has_selection && can_edit && !is_password {
+            items.push(
+                MenuItemFields::new(crate::t!("common-cut"))
+                    .with_on_select_action(SettingsAction::EditorCut)
+                    .with_key_shortcut_label(
+                        custom_tag_to_keystroke(CustomAction::Cut.into())
+                            .map(|keystroke| keystroke.displayed()),
+                    )
+                    .into_item(),
+            );
+        }
+        if has_selection && !is_password {
+            items.push(
+                MenuItemFields::new(crate::t!("common-copy"))
+                    .with_on_select_action(SettingsAction::EditorCopy)
+                    .with_key_shortcut_label(
+                        custom_tag_to_keystroke(CustomAction::Copy.into())
+                            .map(|keystroke| keystroke.displayed()),
+                    )
+                    .into_item(),
+            );
+        }
+        if can_edit {
+            items.push(
+                MenuItemFields::new(crate::t!("common-paste"))
+                    .with_on_select_action(SettingsAction::EditorPaste)
+                    .with_key_shortcut_label(
+                        custom_tag_to_keystroke(CustomAction::Paste.into())
+                            .map(|keystroke| keystroke.displayed()),
+                    )
+                    .into_item(),
+            );
+        }
+
+        if items.is_empty() {
+            None
+        } else {
+            Some(items)
+        }
+    }
+
     fn context_menu_items(&self, ctx: &mut ViewContext<Self>) -> Vec<MenuItem<SettingsAction>> {
         let mut items = vec![];
+
+        if let Some(editor_items) = self.editor_context_menu_items(ctx) {
+            items.extend(editor_items);
+            if ContextFlag::CreateNewSession.is_enabled()
+                || self
+                    .focus_handle
+                    .as_ref()
+                    .map(|h| h.split_pane_state(ctx).is_in_split_pane())
+                    .unwrap_or(false)
+            {
+                items.push(MenuItem::Separator);
+            }
+        }
 
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend(vec![
@@ -1449,6 +1558,7 @@ impl SettingsView {
     fn handle_menu_event(&mut self, event: &menu::Event, ctx: &mut ViewContext<Self>) {
         if let menu::Event::Close { .. } = event {
             self.context_menu_state.take();
+            self.context_menu_editor.take();
         }
         ctx.notify();
     }
@@ -2303,12 +2413,30 @@ impl TypedActionView for SettingsView {
             SettingsAction::Close => ctx.emit(SettingsViewEvent::Pane(PaneEvent::Close)),
             SettingsAction::OpenContextMenu(position) => {
                 self.context_menu_state = Some(*position);
+                self.context_menu_editor = self.editor_at_position(*position, ctx);
                 let menu_items = self.context_menu_items(ctx);
                 self.context_menu.update(ctx, move |menu, ctx| {
                     menu.set_items(menu_items, ctx);
                     ctx.notify();
                 });
                 ctx.notify();
+            }
+            SettingsAction::EditorCut => {
+                if let Some(editor) = self.context_menu_editor.clone() {
+                    ctx.focus(&editor);
+                    editor.update(ctx, |editor, ctx| editor.cut(ctx));
+                }
+            }
+            SettingsAction::EditorCopy => {
+                if let Some(editor) = self.context_menu_editor.clone() {
+                    editor.update(ctx, |editor, ctx| editor.copy(ctx));
+                }
+            }
+            SettingsAction::EditorPaste => {
+                if let Some(editor) = self.context_menu_editor.clone() {
+                    ctx.focus(&editor);
+                    editor.update(ctx, |editor, ctx| editor.paste(ctx));
+                }
             }
             SettingsAction::FocusSelf => ctx.emit(SettingsViewEvent::Pane(PaneEvent::FocusSelf)),
             SettingsAction::Up => self.key_up(ctx),

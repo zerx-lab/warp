@@ -119,8 +119,8 @@ use warp_editor::editor::NavigationKey;
 use warpui::actions::StandardAction;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable, MainAxisSize,
-    ParentElement, Shrinkable, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    get_rich_content_position_id, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex,
+    Hoverable, MainAxisSize, ParentElement, SavePosition, Shrinkable, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 use warpui::elements::{MouseStateHandle, Radius};
 use warpui::fonts::{FamilyId, Properties, Weight};
@@ -3683,6 +3683,13 @@ impl EditorView {
 
     pub fn can_select<C: ModelAsRef>(&self, ctx: &C) -> bool {
         self.model().as_ref(ctx).can_select()
+    }
+
+    /// Whether this editor masks its contents as a password field. Password fields disable
+    /// copy/cut (see [`Self::copy`]/[`Self::cut`]) and should hide those actions in any
+    /// external context menu (e.g. the settings right-click menu) while still allowing paste.
+    pub fn is_password(&self) -> bool {
+        self.is_password
     }
 
     pub fn interaction_state<C: ModelAsRef>(&self, ctx: &C) -> InteractionState {
@@ -8692,7 +8699,7 @@ impl View for EditorView {
             .with_cursor(Cursor::IBeam)
             .finish();
 
-        if let Some(controls) = self.render_controls(ctx) {
+        let content = if let Some(controls) = self.render_controls(ctx) {
             let mut row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::End);
@@ -8701,7 +8708,9 @@ impl View for EditorView {
             row.finish()
         } else {
             hoverable
-        }
+        };
+
+        SavePosition::new(content, &get_rich_content_position_id(&self.view_id)).finish()
     }
 
     fn keymap_context(&self, ctx: &AppContext) -> warpui::keymap::Context {
