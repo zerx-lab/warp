@@ -4,11 +4,11 @@ use ai::LLMId;
 use settings::Setting;
 use warpui::{App, SingletonEntity};
 
-use crate::ai::agent_providers::{lookup_byop, llm_id, AgentProviderSecrets};
+use crate::ai::agent_providers::{llm_id, lookup_byop, AgentProviderSecrets};
 use crate::ai::llms::{DisableReason, LLMPreferences};
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::network::NetworkStatus;
-use crate::settings::{AgentProvider, AgentProviderApiType, AgentProviderModel, AISettings};
+use crate::settings::{AISettings, AgentProvider, AgentProviderApiType, AgentProviderModel};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -121,8 +121,8 @@ fn smoke_lookup_byop_resolves_provider_and_model_without_api_key() {
 
         let encoded = llm_id::encode(provider_id, "llama3.2");
         app.read(|ctx| {
-            let (provider, api_key, model_id) = lookup_byop(ctx, &encoded)
-                .expect("lookup_byop should resolve configured model");
+            let (provider, api_key, model_id) =
+                lookup_byop(ctx, &encoded).expect("lookup_byop should resolve configured model");
             assert_eq!(provider.id, provider_id);
             assert_eq!(model_id, "llama3.2");
             assert!(api_key.is_empty(), "Ollama path allows empty API key");

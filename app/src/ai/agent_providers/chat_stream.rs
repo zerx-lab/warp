@@ -1310,12 +1310,13 @@ fn build_chat_request(
     // `unexpected tool_use_id ... no corresponding tool_use block`。
     let mut skipped_subagent_call_ids: std::collections::HashSet<String> =
         std::collections::HashSet::new();
-    let history_has_tool_call = all_msgs.iter().any(|msg| {
-        matches!(
-            msg.message,
-            Some(api::message::Message::ToolCall(_))
-        )
-    });
+    // Zap:仅在"同一 task_id 下真的落地过结构化 ToolCall"时才允许剥离 AgentOutput
+    // 里的疑似 tool JSON——避免用全历史范围的证据误伤跨轮(不同 task_id)的纯文本回答。
+    let tasks_with_tool_call: std::collections::HashSet<&str> = all_msgs
+        .iter()
+        .filter(|msg| matches!(msg.message, Some(api::message::Message::ToolCall(_))))
+        .map(|msg| msg.task_id.as_str())
+        .collect();
 
     for (idx, msg) in all_msgs.iter().enumerate() {
         // 摘要请求:tail 区间不送上游(只送 head + 末尾追加 SUMMARY_TEMPLATE)
@@ -1408,10 +1409,17 @@ fn build_chat_request(
             api::message::Message::AgentOutput(a) => {
                 // Ollama 本地模型常把 tool JSON 当 AgentOutput 文本落地;同一轮后面还有
                 // 结构化 ToolCall + ToolCallResult。再发给上游会淹没真实摘要,导致 C3 失忆。
-                // 仅在已成功落地结构化 ToolCall 时剥离 JSON 文本,避免提取失败时 C3 历史被掏空。
+                // 仅在(a)同一 task_id 下已经落地过结构化 ToolCall,且(b)这段文本本身能被
+                // extract_tool_calls_from_assistant_text 提取出可执行调用时才剥离——
+                // `contains_tool_shaped_json` 只要求出现 string `name` 键就返回 true(比如
+                // 粘贴的 package.json 内容),会把合法回答误判成 tool JSON 噪音删掉。
                 if api_type == AgentProviderApiType::Ollama
-                    && history_has_tool_call
-                    && super::content_tool_calls::contains_tool_shaped_json(&a.text)
+                    && tasks_with_tool_call.contains(msg.task_id.as_str())
+                    && !super::content_tool_calls::extract_tool_calls_from_assistant_text(
+                        &a.text,
+                        &tool_names,
+                    )
+                    .is_empty()
                 {
                     continue;
                 }
@@ -2575,10 +2583,7 @@ fn serialize_outgoing_tool_call(
                 Some(SkillReference::BundledSkillId(id)) => format!("@warp-skill:{id}"),
                 None => String::new(),
             };
-            (
-                "read_skill".to_owned(),
-                json!({ "name": name }).to_string(),
-            )
+            ("read_skill".to_owned(), json!({ "name": name }).to_string())
         }
         Some(Tool::ReadShellCommandOutput(r)) => {
             use api::message::tool_call::read_shell_command_output::Delay;
@@ -2914,7 +2919,10 @@ pub(super) fn build_client(
                     &proxy_cfg.password,
                     &proxy_cfg.no_proxy,
                 ) {
-                    log::warn!("[byop] proxy URL '{}' 无效,跳过代理配置: {err}", proxy_cfg.url);
+                    log::warn!(
+                        "[byop] proxy URL '{}' 无效,跳过代理配置: {err}",
+                        proxy_cfg.url
+                    );
                 }
             }
         }
@@ -3627,11 +3635,10 @@ pub async fn generate_byop_output(
         let mut end_count: u32 = 0;
         let mut other_count: u32 = 0;
         let mut captured_assistant_text: Option<String> = None;
-        let mut captured_reasoning_text: Option<String> = None;
         // Ollama 等 provider 的 End.captured_content 有时为空,但 Chunk 事件已送达正文;
-        // 流式累积作为 content→tool 提取的可靠来源。
+        // 流式累积作为 content→tool 提取的可靠来源(仅 assistant 正文;reasoning 中的
+        // 假设性命令描述不应被当作可执行 tool call,见下方 extract_sources)。
         let mut streamed_assistant_text = String::new();
-        let mut streamed_reasoning_text = String::new();
         // 累积本轮 token 使用量。genai 在 ChatStreamEvent::End 事件里携带
         // captured_usage(Option<Usage>),其 prompt_tokens 是本轮整段 history
         // (Anthropic / OpenAI 都按"完整请求 prompt"计),completion_tokens 是模型输出。
@@ -3778,7 +3785,6 @@ pub async fn generate_byop_output(
                 ChatStreamEvent::ReasoningChunk(c) if !c.content.is_empty() => {
                     reasoning_count += 1;
                     reasoning_bytes += c.content.len();
-                    streamed_reasoning_text.push_str(&c.content);
                     // 运行时 latch:该 (api_type, model_id) 发过 reasoning chunk →
                     // 标记下一轮起强制 echo reasoning_content,覆盖 INTERLEAVED_RULES
                     // 静态表外的任意国产/第三方 thinking 模型(对齐 opencode 数据驱动思路,
@@ -3905,11 +3911,6 @@ pub async fn generate_byop_output(
                             tool_order = captured_order;
                         }
                     }
-                    if let Some(reasoning) = end.captured_reasoning_content.as_ref() {
-                        if !reasoning.is_empty() {
-                            captured_reasoning_text = Some(reasoning.clone());
-                        }
-                    }
                     if let Some(usage) = end.captured_usage.as_ref() {
                         // 多次 End 取最大值兜底(理论上单次 stream 只有一次 End)。
                         if let Some(p) = usage.prompt_tokens {
@@ -3944,12 +3945,13 @@ pub async fn generate_byop_output(
             }
         }
 
-        if tool_bufs.is_empty() {
-            let extract_sources: [&str; 4] = [
+        // Zap:content→tool 提取 fallback 只对 Ollama 生效,与 :1412 的历史过滤对称——
+        // 云端 provider(OpenAI/Anthropic/...)的正文如果恰好长得像 tool JSON(比如模型在
+        // 讲解一段 JSON 示例),不应该被误当成真实 ToolCall 执行。
+        if tool_bufs.is_empty() && api_type == AgentProviderApiType::Ollama {
+            let extract_sources: [&str; 2] = [
                 streamed_assistant_text.as_str(),
                 captured_assistant_text.as_deref().unwrap_or(""),
-                streamed_reasoning_text.as_str(),
-                captured_reasoning_text.as_deref().unwrap_or(""),
             ];
             let mut parsed_any_text = false;
             for text in extract_sources.into_iter().filter(|t| !t.is_empty()) {
@@ -3982,13 +3984,10 @@ pub async fn generate_byop_output(
             if tool_bufs.is_empty() && parsed_any_text {
                 let preview: String = streamed_assistant_text.chars().take(240).collect();
                 log::info!(
-                    "[byop] content_tool_extract: no tools parsed \
-                     (streamed={}B captured={}B reasoning_streamed={}B reasoning_captured={}B) \
+                    "[byop] content_tool_extract: no tools parsed (streamed={}B captured={}B) \
                      preview={preview:?}",
                     streamed_assistant_text.len(),
                     captured_assistant_text.as_ref().map(|t| t.len()).unwrap_or(0),
-                    streamed_reasoning_text.len(),
-                    captured_reasoning_text.as_ref().map(|t| t.len()).unwrap_or(0),
                 );
             } else if tool_bufs.is_empty() {
                 log::warn!(
@@ -6009,7 +6008,12 @@ mod serializer_readiness_tests {
     }
 
     fn build_openai_request(params: &RequestParams) -> Result<ChatRequest, ConvertToAPITypeError> {
-        build_chat_request(params, false, AgentProviderApiType::OpenAi, attachment_caps::AttachmentCaps::default())
+        build_chat_request(
+            params,
+            false,
+            AgentProviderApiType::OpenAi,
+            attachment_caps::AttachmentCaps::default(),
+        )
     }
 
     fn assert_request_has_no_repair_placeholder(request: &ChatRequest) {
@@ -6872,7 +6876,12 @@ mod serializer_readiness_tests {
     #[test]
     fn smoke_build_chat_request_simple_user_query_succeeds() {
         let params = request_params(
-            vec![make_user_query_message("task-1", "req-1", "hello".to_owned(), &[])],
+            vec![make_user_query_message(
+                "task-1",
+                "req-1",
+                "hello".to_owned(),
+                &[],
+            )],
             vec![user_query_input("hello")],
         );
         let request = build_openai_request(&params).expect("simple user query should serialize");

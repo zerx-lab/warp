@@ -25,19 +25,6 @@ fn extracts_qwen_multiline_fenced_echo_json() {
 }
 
 #[test]
-fn detects_multiline_fenced_tool_json() {
-    let text = "```json\n{\"type\":\"function\",\"name\":\"run_shell_command\",\"parameters\":{\"command\":\"echo hello\"}}\n```";
-    assert!(super::contains_tool_shaped_json(text));
-}
-
-#[test]
-fn prose_without_json_returns_false() {
-    assert!(!super::contains_tool_shaped_json(
-        "The output of running echo hello is hello."
-    ));
-}
-
-#[test]
 fn extracts_llama_wrong_long_running_tool_as_shell() {
     let text = r#"{"type":"function","name":"write_to_long_running_shell_command","parameters":{"command":"echo hello"}}"#;
     let calls = extract_tool_calls_from_assistant_text(text, &shell_tools());
@@ -62,7 +49,8 @@ fn unknown_tool_name_is_skipped() {
 
 #[test]
 fn extracts_run_code_command_alias() {
-    let text = r#"{"type":"function","name":"run_code_command","parameters":{"command":"echo hello"}}"#;
+    let text =
+        r#"{"type":"function","name":"run_code_command","parameters":{"command":"echo hello"}}"#;
     let calls = extract_tool_calls_from_assistant_text(text, &shell_tools());
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].fn_name, "run_shell_command");
@@ -97,20 +85,33 @@ fn extracts_openai_tool_calls_array_wrapper() {
 fn prefers_run_shell_over_earlier_webfetch() {
     let text = r#"{"type":"function","name":"webfetch","parameters":{"url":"https://example.com"}}
 {"type":"function","name":"run_shell_command","parameters":{"command":"echo hello"}}"#;
-    let tools = vec![
-        "run_shell_command".to_owned(),
-        "webfetch".to_owned(),
-    ];
+    let tools = vec!["run_shell_command".to_owned(), "webfetch".to_owned()];
     let calls = extract_tool_calls_from_assistant_text(text, &tools);
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].fn_name, "run_shell_command");
 }
 
 #[test]
-fn first_valid_json_wins_among_multiple() {
+fn disallowed_websearch_filtered_leaves_echo_as_shell_call() {
+    // "websearch" is a real registered tool but isn't in `shell_tools()`'s allow-list,
+    // so it's dropped; "echo" normalizes to run_shell_command and survives as the
+    // only candidate. Not actually an ordering test (see below for that).
     let text = r#"{"name":"websearch","arguments":{"query":"x"}}
 {"name":"echo","arguments":{"message":"hi"}}"#;
     let calls = extract_tool_calls_from_assistant_text(text, &shell_tools());
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].fn_arguments["command"], "echo hi");
+}
+
+#[test]
+fn last_valid_json_wins_when_no_shell_call_present() {
+    // Real `pick_best_tool_call` policy: prefer run_shell_command; otherwise the
+    // *last* valid candidate wins (not the first).
+    let text = r#"{"type":"function","name":"webfetch","parameters":{"url":"https://example.com"}}
+{"type":"function","name":"websearch","parameters":{"query":"rust async"}}"#;
+    let tools = vec!["webfetch".to_owned(), "websearch".to_owned()];
+    let calls = extract_tool_calls_from_assistant_text(text, &tools);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].fn_name, "websearch");
+    assert_eq!(calls[0].fn_arguments["query"], "rust async");
 }

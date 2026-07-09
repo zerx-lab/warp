@@ -50,15 +50,6 @@ fn pick_best_tool_call(candidates: Vec<ToolCall>) -> Vec<ToolCall> {
     candidates.last().cloned().into_iter().collect()
 }
 
-/// Returns true when `text` is (or contains) tool-call-shaped JSON that local models
-/// emit as markdown/prose instead of native `tool_calls`. Used to omit these blobs
-/// from Ollama outbound history when structured ToolCall messages follow.
-pub fn contains_tool_shaped_json(text: &str) -> bool {
-    collect_json_candidates(text)
-        .iter()
-        .any(|candidate| extract_name_and_args(candidate).is_some())
-}
-
 fn collect_json_candidates(text: &str) -> Vec<Value> {
     let mut candidates = Vec::new();
     for block in extract_fenced_json_blocks(text) {
@@ -207,24 +198,19 @@ fn normalize_tool_call(raw_name: String, args: Value) -> Option<(String, Value)>
             }
             remap_shell_from_command_arg(args)
         }
-        "run_code_command" | "run_command" | "execute_command" | "shell_command"
-        | "execute_shell_command" | "run_shell" | "shell" | "bash" | "terminal_command" => {
-            remap_shell_from_command_arg(args)
-        }
+        "run_code_command"
+        | "run_command"
+        | "execute_command"
+        | "shell_command"
+        | "execute_shell_command"
+        | "run_shell"
+        | "shell"
+        | "bash"
+        | "terminal_command" => remap_shell_from_command_arg(args),
         name if super::tools::lookup(name).is_some() => {
             if name == "run_shell_command" {
                 if let Some(command) = args.get("command").and_then(Value::as_str) {
                     return Some((raw_name, shell_command_args(command.to_owned())));
-                }
-                if args.is_string() {
-                    if let Ok(parsed) = serde_json::from_str::<Value>(args.as_str().unwrap_or("")) {
-                        if let Some(command) = parsed.get("command").and_then(Value::as_str) {
-                            return Some((
-                                raw_name,
-                                shell_command_args(command.to_owned()),
-                            ));
-                        }
-                    }
                 }
             }
             Some((raw_name, args))

@@ -99,10 +99,7 @@ fn build_env() -> Environment<'static> {
             "system/trinity.j2",
             include_str!("prompts/system/trinity.j2"),
         ),
-        (
-            "system/local.j2",
-            include_str!("prompts/system/local.j2"),
-        ),
+        ("system/local.j2", include_str!("prompts/system/local.j2")),
     ] {
         env.add_template(name, src)
             .unwrap_or_else(|e| panic!("template {name} parses: {e}"));
@@ -501,7 +498,11 @@ mod tests {
             ("my-custom-model", "system/default.j2"),
             ("", "system/default.j2"),
         ] {
-            assert_eq!(pick_template(id, AgentProviderApiType::OpenAi), want, "id={id}");
+            assert_eq!(
+                pick_template(id, AgentProviderApiType::OpenAi),
+                want,
+                "id={id}"
+            );
         }
     }
 
@@ -517,7 +518,11 @@ mod tests {
             ("google/gemini-2.5-flash", "system/gemini.j2"),
             ("moonshot/kimi-k2", "system/kimi.j2"),
         ] {
-            assert_eq!(pick_template(id, AgentProviderApiType::OpenAi), want, "id={id}");
+            assert_eq!(
+                pick_template(id, AgentProviderApiType::OpenAi),
+                want,
+                "id={id}"
+            );
         }
     }
 
@@ -530,7 +535,11 @@ mod tests {
             ("KIMI-K2", "system/kimi.j2"),
             ("Anthropic/Claude-3.5", "system/anthropic.j2"),
         ] {
-            assert_eq!(pick_template(id, AgentProviderApiType::OpenAi), want, "id={id}");
+            assert_eq!(
+                pick_template(id, AgentProviderApiType::OpenAi),
+                want,
+                "id={id}"
+            );
         }
     }
 
@@ -551,7 +560,14 @@ mod tests {
                 shell_version: Some("5.1".into()),
             }),
         ];
-        let out = render_system(AgentProviderApiType::OpenAi,&LLMId::from("byop:p:deepseek-chat"), &ctx, &[], false, &[]);
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
+            &LLMId::from("byop:p:deepseek-chat"),
+            &ctx,
+            &[],
+            false,
+            &[],
+        );
         assert!(
             out.contains("Working directory: /home/user/project"),
             "{out}"
@@ -575,7 +591,8 @@ mod tests {
             "deepseek-chat",
             "weird-model",
         ] {
-            let out = render_system(AgentProviderApiType::OpenAi,
+            let out = render_system(
+                AgentProviderApiType::OpenAi,
                 &LLMId::from(format!("byop:p:{id}").as_str()),
                 &[],
                 &[],
@@ -591,7 +608,14 @@ mod tests {
 
     #[test]
     fn render_omits_skills_block_when_empty() {
-        let out = render_system(AgentProviderApiType::OpenAi,&LLMId::from("byop:p:deepseek-chat"), &[], &[], false, &[]);
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
+            &LLMId::from("byop:p:deepseek-chat"),
+            &[],
+            &[],
+            false,
+            &[],
+        );
         // 没 skills 时 skills 区块不应出现
         assert!(
             !out.contains("Skills provide specialized instructions"),
@@ -618,7 +642,14 @@ mod tests {
         let ctx = vec![AIAgentContext::Skills {
             skills: vec![skill],
         }];
-        let out = render_system(AgentProviderApiType::OpenAi,&LLMId::from("byop:p:deepseek-chat"), &ctx, &[], false, &[]);
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
+            &LLMId::from("byop:p:deepseek-chat"),
+            &ctx,
+            &[],
+            false,
+            &[],
+        );
         assert!(
             out.contains(skill_path),
             "system prompt must expose the skill_path so the model can pass it to read_skill; got: {out}"
@@ -645,7 +676,14 @@ mod tests {
         let ctx = vec![AIAgentContext::Skills {
             skills: vec![skill],
         }];
-        let out = render_system(AgentProviderApiType::OpenAi,&LLMId::from("byop:p:deepseek-chat"), &ctx, &[], false, &[]);
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
+            &LLMId::from("byop:p:deepseek-chat"),
+            &ctx,
+            &[],
+            false,
+            &[],
+        );
         assert!(
             out.contains("find-skills"),
             "bundled skill name should still appear in prompt: {out}"
@@ -663,7 +701,14 @@ mod tests {
     #[test]
     fn fallback_does_not_panic() {
         // render_system 永远不会 panic,失败也走 fallback_system
-        let out = render_system(AgentProviderApiType::OpenAi,&LLMId::from("byop:p:any"), &[], &[], false, &[]);
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
+            &LLMId::from("byop:p:any"),
+            &[],
+            &[],
+            false,
+            &[],
+        );
         assert!(!out.is_empty());
     }
 
@@ -676,7 +721,14 @@ mod tests {
             "websearch".into(),
             "mcp__github__create_issue".into(),
         ];
-        let out = render_system(AgentProviderApiType::OpenAi,&LLMId::from("byop:p:deepseek-chat"), &[], &tools, false, &[]);
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
+            &LLMId::from("byop:p:deepseek-chat"),
+            &[],
+            &tools,
+            false,
+            &[],
+        );
         for name in &tools {
             assert!(
                 out.contains(name),
@@ -693,13 +745,27 @@ mod tests {
     #[test]
     fn render_omits_tool_list_when_empty() {
         // tool_names 为空(理论上不会发生,兜底:不渲染白名单段)
-        let out = render_system(AgentProviderApiType::OpenAi,&LLMId::from("byop:p:deepseek-chat"), &[], &[], false, &[]);
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
+            &LLMId::from("byop:p:deepseek-chat"),
+            &[],
+            &[],
+            false,
+            &[],
+        );
         assert!(!out.contains("Available Tools"), "{out}");
     }
 
     #[test]
     fn plan_mode_off_omits_plan_block() {
-        let out = render_system(AgentProviderApiType::OpenAi,&LLMId::from("byop:p:deepseek-chat"), &[], &[], false, &[]);
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
+            &LLMId::from("byop:p:deepseek-chat"),
+            &[],
+            &[],
+            false,
+            &[],
+        );
         assert!(
             !out.contains("Plan Mode (Read-Only)"),
             "plan_mode=false 不应包含 Plan Mode 段: {out}"
@@ -718,7 +784,8 @@ mod tests {
             "deepseek-chat",
             "weird-model",
         ] {
-            let out = render_system(AgentProviderApiType::OpenAi,
+            let out = render_system(
+                AgentProviderApiType::OpenAi,
                 &LLMId::from(format!("byop:p:{id}").as_str()),
                 &[],
                 &[],
@@ -741,7 +808,14 @@ mod tests {
 
     #[test]
     fn render_omits_user_rules_block_when_empty() {
-        let out = render_system(AgentProviderApiType::OpenAi,&LLMId::from("byop:p:deepseek-chat"), &[], &[], false, &[]);
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
+            &LLMId::from("byop:p:deepseek-chat"),
+            &[],
+            &[],
+            false,
+            &[],
+        );
         assert!(
             !out.contains("# User rules"),
             "user_rules 为空时不应渲染 user rules 区块: {out}"
@@ -754,14 +828,18 @@ mod tests {
             Some("My rule".to_string()),
             "Always use snake_case in Rust.".to_string(),
         )];
-        let out = render_system(AgentProviderApiType::OpenAi,
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
             &LLMId::from("byop:p:deepseek-chat"),
             &[],
             &[],
             false,
             &rules,
         );
-        assert!(out.contains("# User rules"), "应渲染 user rules 区块: {out}");
+        assert!(
+            out.contains("# User rules"),
+            "应渲染 user rules 区块: {out}"
+        );
         assert!(out.contains("## My rule"), "应包含规则名: {out}");
         assert!(
             out.contains("Always use snake_case in Rust."),
@@ -785,7 +863,8 @@ mod tests {
             "deepseek-chat",
             "weird-model",
         ] {
-            let out = render_system(AgentProviderApiType::OpenAi,
+            let out = render_system(
+                AgentProviderApiType::OpenAi,
                 &LLMId::from(format!("byop:p:{id}").as_str()),
                 &[],
                 &[],
@@ -807,7 +886,8 @@ mod tests {
             (Some("R2".to_string()), "second content".to_string()),
             (Some("R3".to_string()), "third content".to_string()),
         ];
-        let out = render_system(AgentProviderApiType::OpenAi,
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
             &LLMId::from("byop:p:deepseek-chat"),
             &[],
             &[],
@@ -838,7 +918,8 @@ mod tests {
     #[test]
     fn render_user_rules_handles_no_name() {
         let rules = vec![(None, "Be terse.".to_string())];
-        let out = render_system(AgentProviderApiType::OpenAi,
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
             &LLMId::from("byop:p:deepseek-chat"),
             &[],
             &[],
@@ -870,7 +951,8 @@ mod tests {
             "trinity-v1",
             "weird-model",
         ] {
-            let out = render_system(AgentProviderApiType::OpenAi,
+            let out = render_system(
+                AgentProviderApiType::OpenAi,
                 &LLMId::from(format!("byop:p:{id}").as_str()),
                 &[],
                 &[],
@@ -893,7 +975,8 @@ mod tests {
         // meta-rule 应在工具列表之前,不被 user_rules / project_rules 覆盖。
         // 需要传一个非空 tool 列表,否则 tool_aliases.j2 整个块被 {% if available_tools %} 跳过。
         let tools = vec!["read_files".to_string()];
-        let out = render_system(AgentProviderApiType::OpenAi,
+        let out = render_system(
+            AgentProviderApiType::OpenAi,
             &LLMId::from("byop:p:claude-sonnet-4-5"),
             &[],
             &tools,
@@ -903,9 +986,7 @@ mod tests {
         let pos_thinking = out
             .find("# Thinking language")
             .expect("应包含 thinking_language");
-        let pos_tools = out
-            .find("# Available Tools")
-            .expect("应包含 tool_aliases");
+        let pos_tools = out.find("# Available Tools").expect("应包含 tool_aliases");
         assert!(
             pos_thinking < pos_tools,
             "thinking_language 应在 tool_aliases 之前: thinking={pos_thinking}, tools={pos_tools}\n{out}"
