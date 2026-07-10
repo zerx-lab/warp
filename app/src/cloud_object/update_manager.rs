@@ -1440,11 +1440,6 @@ impl UpdateManager {
         initiated_by: InitiatedBy,
         ctx: &mut ModelContext<Self>,
     ) {
-        // If the object isn't known to the server yet, we can't delete it.
-        let Some(server_id) = id.server_id() else {
-            return;
-        };
-
         let uid = id.uid();
         // If there's a pending online-only operation for this object, don't delete it.
         let Some((has_pending_online_only_operation, has_pending_delete)) =
@@ -1464,15 +1459,16 @@ impl UpdateManager {
             return;
         }
 
-        // Zap:云端 delete RPC 已删除,这里折叠为本地直接清除。
-        let num_deleted_objects =
-            self.on_object_delete_success(vec![SyncId::ServerId(server_id)], ctx);
+        // Zap:云端 delete RPC 已删除,这里折叠为本地直接清除。本地对象(SyncId::ClientId)
+        // 没有 server_id;之前这里要求 `id.server_id()` 才能继续,导致本地创建的对象
+        // (例如 AI Rule)永远无法删除,点击 Delete 按钮悄无声息地提前 return。
+        let num_deleted_objects = self.on_object_delete_success(vec![id.sync_id()], ctx);
         ctx.emit(UpdateManagerEvent::ObjectOperationComplete {
             result: ObjectOperationResult {
                 success_type: OperationSuccessType::Success,
                 operation: ObjectOperation::Delete { initiated_by },
                 client_id: None,
-                server_id: Some(ServerId::from_string_lossy(&uid)),
+                server_id: id.server_id(),
                 num_objects: Some(num_deleted_objects),
             },
         });
