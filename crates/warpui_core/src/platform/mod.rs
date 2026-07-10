@@ -410,6 +410,7 @@ pub trait FontDB: 'static {
         size: f32,
         glyph_id: GlyphId,
         scale: Vector2F,
+        subpixel_alignment: SubpixelAlignment,
         glyph_config: &rendering::GlyphConfig,
     ) -> Result<RectI>;
 

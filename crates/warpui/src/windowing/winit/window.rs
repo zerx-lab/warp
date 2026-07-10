@@ -18,7 +18,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use wgpu::rwh::HasDisplayHandle;
 use wgpu::{AdapterInfo, CompositeAlphaMode};
 use winit::dpi::PhysicalPosition;
@@ -41,20 +41,20 @@ use crate::platform::{
     WindowOptions, WindowStyle,
 };
 use crate::rendering::{
-    wgpu::{
-        adapter_has_rendering_offset_bug, from_wgpu_backend, renderer, to_wgpu_backend, Renderer,
-        Resources,
-    },
     GPUPowerPreference, GlyphConfig, OnGPUDeviceSelected,
+    wgpu::{
+        Renderer, Resources, adapter_has_rendering_offset_bug, from_wgpu_backend, renderer,
+        to_wgpu_backend,
+    },
 };
 use crate::windowing::WindowCallbacks;
-use crate::{fonts, geometry, Scene};
 use crate::{DisplayId, DisplayIdx, OptionalPlatformWindow, WindowId};
+use crate::{Scene, fonts, geometry};
 
 use super::app::CustomEvent;
 
 #[cfg(windows)]
-use super::windows::{get_system_caption_button_bounds, set_window_attribute, WindowAttributeErr};
+use super::windows::{WindowAttributeErr, get_system_caption_button_bounds, set_window_attribute};
 #[cfg(windows)]
 use windows::Win32::Graphics::Dwm;
 
@@ -900,8 +900,8 @@ impl Window {
                     format,
                 )
             },
-            &|glyph_key, scale, alignment| {
-                font_cache.glyph_raster_bounds(glyph_key, scale, alignment)
+            &|glyph_key, scale, subpixel_alignment, alignment| {
+                font_cache.glyph_raster_bounds(glyph_key, scale, subpixel_alignment, alignment)
             },
             inner.surface_size,
             Some(Box::new(|| {

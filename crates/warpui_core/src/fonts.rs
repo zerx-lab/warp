@@ -7,11 +7,11 @@ pub use text_layout_system::TextLayoutSystem;
 
 use std::hash::Hash;
 
-use crate::{platform, rendering, scene::GlyphKey, SingletonEntity};
+use crate::{SingletonEntity, platform, rendering, scene::GlyphKey};
 use anyhow::{Error, Result};
 use dashmap::{
-    mapref::{entry::Entry, one::Ref},
     DashMap,
+    mapref::{entry::Entry, one::Ref},
 };
 
 use enum_iterator::Sequence;
@@ -20,7 +20,7 @@ use ordered_float::OrderedFloat;
 use pathfinder_geometry::vector::Vector2I;
 use pathfinder_geometry::{
     rect::{RectF, RectI},
-    vector::{vec2f, Vector2F},
+    vector::{Vector2F, vec2f},
 };
 use serde::{Deserialize, Serialize};
 
@@ -128,7 +128,7 @@ impl CustomWeightConversion for CustomWeight {
 }
 
 #[cfg(not(target_family = "wasm"))]
-use {futures_util::future::BoxFuture, futures_util::FutureExt};
+use {futures_util::FutureExt, futures_util::future::BoxFuture};
 
 pub(crate) use external_fallback::{FontBytes, RequestedFallbackFontSource};
 
@@ -207,7 +207,11 @@ pub struct FontInfo {
     pub is_monospace: bool,
 }
 
-type RasterBoundsKey = (GlyphKey, (OrderedFloat<f32>, OrderedFloat<f32>));
+type RasterBoundsKey = (
+    GlyphKey,
+    (OrderedFloat<f32>, OrderedFloat<f32>),
+    SubpixelAlignment,
+);
 type AvailableSystemFonts = Vec<(Option<FamilyId>, FontInfo)>;
 type AvailableSystemFontsSender = futures::channel::oneshot::Sender<AvailableSystemFonts>;
 
@@ -422,11 +426,14 @@ impl Cache {
         &self,
         glyph_key: GlyphKey,
         scale: Vector2F,
+        subpixel_alignment: SubpixelAlignment,
         glyph_config: &rendering::GlyphConfig,
     ) -> Result<RectI> {
-        let entry = self
-            .raster_bounds
-            .entry((glyph_key, (scale.x().into(), scale.y().into())));
+        let entry = self.raster_bounds.entry((
+            glyph_key,
+            (scale.x().into(), scale.y().into()),
+            subpixel_alignment,
+        ));
         let bounds = match entry {
             Entry::Occupied(entry) => entry.into_ref(),
             Entry::Vacant(entry) => entry.insert(self.platform.glyph_raster_bounds(
@@ -434,6 +441,7 @@ impl Cache {
                 glyph_key.font_size.into(),
                 glyph_key.glyph_id,
                 scale,
+                subpixel_alignment,
                 glyph_config,
             )),
         };

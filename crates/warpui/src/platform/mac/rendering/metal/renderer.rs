@@ -1,5 +1,5 @@
 use crate::rendering::atlas::{AllocatedRegion, TextureId};
-use crate::rendering::{get_best_dash_gap, GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn};
+use crate::rendering::{GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn, get_best_dash_gap};
 use warpui_core::{
     fonts::{self, SubpixelAlignment},
     rendering::{self, texture_cache::TextureCache},
@@ -19,9 +19,9 @@ use warpui_core::platform::CapturedFrame;
 use pathfinder_color::{ColorF, ColorU};
 use pathfinder_geometry::{
     rect::RectF,
-    vector::{vec2f, Vector2F},
+    vector::{Vector2F, vec2f},
 };
-use warpui_core::fonts::{canvas, RasterizedGlyph};
+use warpui_core::fonts::{RasterizedGlyph, canvas};
 use warpui_core::scene::{CornerRadius, GlyphFade, Icon, Image, Layer, Scene};
 
 use std::collections::HashMap;
@@ -633,8 +633,9 @@ impl<'a> Frame<'a> {
                 subpixel_alignment,
                 &|atlas_size| create_new_texture_atlas(atlas_size, self.ctx.device),
                 &insert_glyph_into_texture,
-                &|glyph_key, scale, alignment| {
-                    self.ctx.glyph_raster_bounds(glyph_key, scale, alignment)
+                &|glyph_key, scale, subpixel_alignment, alignment| {
+                    self.ctx
+                        .glyph_raster_bounds(glyph_key, scale, subpixel_alignment, alignment)
                 },
                 &|glyph_key, scale, subpixel_alignment, glyph_config, format| {
                     self.ctx.rasterize_glyph(
@@ -940,9 +941,10 @@ impl MetalDrawContext<'_> {
         &self,
         glyph_key: GlyphKey,
         scale: Vector2F,
+        subpixel_alignment: SubpixelAlignment,
         glyph_config: &rendering::GlyphConfig,
     ) -> anyhow::Result<RectI> {
-        (self.glyph_raster_bounds_fn)(glyph_key, scale, glyph_config)
+        (self.glyph_raster_bounds_fn)(glyph_key, scale, subpixel_alignment, glyph_config)
     }
 }
 
@@ -979,8 +981,8 @@ impl super::super::Renderer for Renderer {
                     format,
                 )
             },
-            glyph_raster_bounds_fn: &|glyph_key, scale, alignment| {
-                font_cache.glyph_raster_bounds(glyph_key, scale, alignment)
+            glyph_raster_bounds_fn: &|glyph_key, scale, subpixel_alignment, alignment| {
+                font_cache.glyph_raster_bounds(glyph_key, scale, subpixel_alignment, alignment)
             },
         };
 

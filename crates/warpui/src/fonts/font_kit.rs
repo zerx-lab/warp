@@ -9,7 +9,7 @@ use font_kit::font::Font;
 use font_kit::hinting::HintingOptions;
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::transform2d::Transform2F;
-use pathfinder_geometry::vector::{vec2i, Vector2F, Vector2I};
+use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2i};
 use warpui_core::fonts::canvas::RasterFormat;
 use warpui_core::fonts::{
     FontId, GlyphId, Properties, RasterizedGlyph, Style, SubpixelAlignment, Weight,
@@ -45,6 +45,7 @@ impl Rasterizer {
         point_size: f32,
         glyph_id: GlyphId,
         scale: Vector2F,
+        _subpixel_alignment: SubpixelAlignment,
         glyph_config: &rendering::GlyphConfig,
     ) -> Result<RectI> {
         let raw_raster_bounds = self.font_for_id(font_id).raster_bounds(
@@ -100,8 +101,14 @@ impl Rasterizer {
         #[cfg(target_os = "macos")]
         let _pool = AutoreleasePoolGuard::new();
 
-        let bounds =
-            self.glyph_raster_bounds(font_id, point_size, glyph_id, scale, glyph_config)?;
+        let bounds = self.glyph_raster_bounds(
+            font_id,
+            point_size,
+            glyph_id,
+            scale,
+            subpixel_alignment,
+            glyph_config,
+        )?;
         let mut canvas = Canvas::new(bounds.size(), raster_format_to_font_kit(format));
 
         let base_transform = Transform2F::from_scale(scale).translate(-bounds.origin().to_f32());

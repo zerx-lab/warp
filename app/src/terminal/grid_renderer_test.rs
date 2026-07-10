@@ -1,17 +1,20 @@
-use super::{active_or_next_match, CachedBackgroundColor};
+use super::{CachedBackgroundColor, active_or_next_match};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
-use crate::terminal::{grid_renderer, SizeInfo};
+use crate::terminal::{SizeInfo, grid_renderer};
 use anyhow::Result;
 use futures::FutureExt as _;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F, Vector2I};
+use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2f};
 use std::any::Any;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use warpui::fonts::{Cache as FontCache, FamilyId, FontId, GlyphId, Metrics, Properties};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use warpui::fonts::{
+    Cache as FontCache, FamilyId, FontId, GlyphId, Metrics, Properties, SubpixelAlignment,
+};
 use warpui::platform::{self, LoadedSystemFonts, TextLayoutSystem};
+use warpui::scene::GlyphKey;
 use warpui::text_layout::{ClipConfig, Line, TextAlignment, TextFrame};
 use warpui::units::{IntoLines, Lines, Pixels};
 
@@ -23,6 +26,7 @@ fn rect_from_points(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> RectF {
 struct FontLookupCounts {
     select_font: AtomicUsize,
     glyph_for_char: AtomicUsize,
+    glyph_raster_bounds: AtomicUsize,
 }
 
 struct CountingFontDb {
@@ -98,8 +102,12 @@ impl platform::FontDB for CountingFontDb {
         _size: f32,
         _glyph_id: GlyphId,
         _scale: Vector2F,
+        _subpixel_alignment: SubpixelAlignment,
         _glyph_config: &warpui::rendering::GlyphConfig,
     ) -> Result<pathfinder_geometry::rect::RectI> {
+        self.counts
+            .glyph_raster_bounds
+            .fetch_add(1, Ordering::Relaxed);
         Ok(pathfinder_geometry::rect::RectI::default())
     }
 
@@ -117,7 +125,7 @@ impl platform::FontDB for CountingFontDb {
         _size: f32,
         _glyph_id: GlyphId,
         _scale: Vector2F,
-        _subpixel_alignment: warpui::fonts::SubpixelAlignment,
+        _subpixel_alignment: SubpixelAlignment,
         _glyph_config: &warpui::rendering::GlyphConfig,
         _format: warpui::fonts::canvas::RasterFormat,
     ) -> Result<warpui::fonts::RasterizedGlyph> {
@@ -140,6 +148,35 @@ impl platform::FontDB for CountingFontDb {
     fn text_layout_system(&self) -> &dyn TextLayoutSystem {
         self
     }
+}
+
+#[test]
+fn glyph_raster_bounds_are_cached_per_subpixel_alignment() {
+    let counts = Arc::new(FontLookupCounts::default());
+    let font_cache = FontCache::new(Box::new(CountingFontDb {
+        counts: Arc::clone(&counts),
+    }));
+    let glyph = GlyphKey {
+        glyph_id: 0,
+        font_id: FontId(0),
+        font_size: 12.0.into(),
+    };
+    let glyph_config = warpui::rendering::GlyphConfig::default();
+    let scale = Vector2F::splat(1.0);
+    let aligned = SubpixelAlignment::new(vec2f(0.0, 0.0));
+    let offset = SubpixelAlignment::new(vec2f(1.0 / 3.0, 0.0));
+
+    font_cache
+        .glyph_raster_bounds(glyph, scale, aligned, &glyph_config)
+        .unwrap();
+    font_cache
+        .glyph_raster_bounds(glyph, scale, aligned, &glyph_config)
+        .unwrap();
+    font_cache
+        .glyph_raster_bounds(glyph, scale, offset, &glyph_config)
+        .unwrap();
+
+    assert_eq!(counts.glyph_raster_bounds.load(Ordering::Relaxed), 2);
 }
 
 impl TextLayoutSystem for CountingFontDb {

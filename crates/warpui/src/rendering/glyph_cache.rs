@@ -1,4 +1,4 @@
-use crate::fonts::{canvas, RasterizedGlyph};
+use crate::fonts::{RasterizedGlyph, canvas};
 use crate::rendering::atlas::{self, AllocatedRegion, TextureId};
 use crate::{fonts::SubpixelAlignment, rendering, scene::GlyphKey};
 use anyhow::Result;
@@ -21,7 +21,7 @@ type InsertIntoTextureCallback<'a, T> = dyn Fn(AllocatedRegion, &RasterizedGlyph
 
 /// Callback to compute the bounds of a glyph when rasterized.
 pub(crate) type GlyphRasterBoundsFn<'a> =
-    dyn Fn(GlyphKey, Vector2F, &rendering::GlyphConfig) -> Result<RectI> + 'a;
+    dyn Fn(GlyphKey, Vector2F, SubpixelAlignment, &rendering::GlyphConfig) -> Result<RectI> + 'a;
 
 /// Callback to rasterize a glyph.
 pub(crate) type RasterizeGlyphFn<'a> = dyn Fn(
@@ -110,8 +110,12 @@ impl<Texture> GlyphCache<Texture> {
 
         match self.cache.get(&cache_key) {
             None => {
-                let bounds =
-                    raster_bounds_fn(glyph_key, Vector2F::splat(scale_factor), &self.glyph_config)?;
+                let bounds = raster_bounds_fn(
+                    glyph_key,
+                    Vector2F::splat(scale_factor),
+                    subpixel_alignment,
+                    &self.glyph_config,
+                )?;
 
                 if bounds.size() == Vector2I::zero() {
                     return Ok(None);

@@ -1,7 +1,7 @@
 use crate::platform::mac::rendering::Device;
 use crate::platform::mac::window::WindowState;
 use crate::rendering::wgpu::{Renderer, Resources};
-use crate::{fonts, Scene};
+use crate::{Scene, fonts};
 
 impl super::super::Renderer for Renderer {
     fn render(&mut self, scene: &Scene, window: &WindowState, font_cache: &fonts::Cache) {
@@ -18,8 +18,8 @@ impl super::super::Renderer for Renderer {
                     format,
                 )
             },
-            &|glyph_key, scale, alignment| {
-                font_cache.glyph_raster_bounds(glyph_key, scale, alignment)
+            &|glyph_key, scale, subpixel_alignment, alignment| {
+                font_cache.glyph_raster_bounds(glyph_key, scale, subpixel_alignment, alignment)
             },
             window.physical_size(),
             None,

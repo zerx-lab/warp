@@ -5,10 +5,10 @@ use crate::fonts::{FontId, GlyphId, RasterizedGlyph, SubpixelAlignment};
 use crate::platform::FontDB as _;
 use crate::rendering::GlyphConfig;
 use crate::windowing::winit::fonts::FontDB;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use cosmic_text::{CacheKey, CacheKeyFlags};
 use pathfinder_geometry::rect::RectI;
-use pathfinder_geometry::vector::{vec2i, Vector2F, Vector2I};
+use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2i};
 
 impl FontDB {
     pub(super) fn glyph_raster_bounds(
@@ -17,6 +17,7 @@ impl FontDB {
         size: f32,
         glyph_id: GlyphId,
         scale: Vector2F,
+        subpixel_alignment: SubpixelAlignment,
         _glyph_config: &GlyphConfig,
     ) -> Result<RectI> {
         let Ok(_typographic_bounds) = self
@@ -45,7 +46,7 @@ impl FontDB {
                     id,
                     glyph_id as u16,
                     size * scale.x(),
-                    (0., 0.),
+                    (subpixel_alignment.to_offset().x(), 0.),
                     CacheKeyFlags::empty(),
                 )
                 .0,
@@ -69,8 +70,14 @@ impl FontDB {
         glyph_config: &GlyphConfig,
         requested_format: RasterFormat,
     ) -> Result<RasterizedGlyph> {
-        let raster_bounds =
-            self.glyph_raster_bounds(font_id, size, glyph_id, scale, glyph_config)?;
+        let raster_bounds = self.glyph_raster_bounds(
+            font_id,
+            size,
+            glyph_id,
+            scale,
+            subpixel_alignment,
+            glyph_config,
+        )?;
 
         let id = *self
             .text_layout_system
