@@ -6,20 +6,20 @@ use std::{
     path::{Path, PathBuf},
     process::{ChildStderr, ChildStdout, ExitStatus, Stdio},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError},
+        Arc, Mutex,
     },
     thread::JoinHandle,
     time::{Duration, Instant},
 };
 
-use anyhow::{Context as _, anyhow};
+use anyhow::{anyhow, Context as _};
 use zeroize::Zeroizing;
 
 use crate::terminal::ssh::util::InteractiveSshCommand;
 use crate::terminal::zmodem::{
-    ZMODEM_ABORT_SEQUENCE, ZmodemDirection, ZmodemEvent, ZmodemSession, ZmodemTransferPaths,
+    ZmodemDirection, ZmodemEvent, ZmodemSession, ZmodemTransferPaths, ZMODEM_ABORT_SEQUENCE,
 };
 
 const SSH_ZMODEM_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -36,6 +36,7 @@ const SSH_ZMODEM_RAW_DOWNLOAD_MAX_TOTAL_SIZE: u64 = 128 * 1024 * 1024 * 1024;
 const SSH_ZMODEM_RAW_UPLOAD_READY: &[u8] = b"WARP_ZMODEM_READY\n";
 const SSH_ZMODEM_RAW_UPLOAD_STAGED: &[u8] = b"WARP_ZMODEM_STAGED\n";
 const SSH_ZMODEM_RAW_UPLOAD_COMMIT: &[u8] = b"WARP_ZMODEM_COMMIT\n";
+const SSH_ZMODEM_REMOTE_RZ_TOKEN_ENV: &str = "WARP_ZMODEM_TOKEN";
 
 enum StdoutReadEvent {
     Bytes(Vec<u8>),
@@ -124,6 +125,7 @@ pub struct DirectSshZmodemUpload {
     pub auth: Option<DirectSshZmodemAuth>,
     pub cwd: Option<String>,
     pub detect_remote_rz_cwd: bool,
+    pub remote_rz_token: Option<String>,
     pub paths: ZmodemTransferPaths,
     pub wsl_distro: Option<String>,
 }
@@ -233,10 +235,23 @@ impl DirectSshZmodemUpload {
             auth,
             cwd,
             detect_remote_rz_cwd,
+            remote_rz_token: None,
             paths,
             wsl_distro,
         })
     }
+
+    pub fn with_remote_rz_token(mut self, token: String) -> Self {
+        self.remote_rz_token = Some(token);
+        self
+    }
+}
+
+pub(crate) fn remote_rz_drag_command(token: &str) -> String {
+    format!(
+        "\u{15}env {SSH_ZMODEM_REMOTE_RZ_TOKEN_ENV}={} rz\r",
+        shell_words::quote(token)
+    )
 }
 
 impl DirectSshZmodemDownload {
@@ -633,7 +648,23 @@ fn run_direct_ssh_raw_upload_with_child(
                     });
                     return Ok(());
                 }
-                return Err(err).context("failed to write raw ZMODEM upload bytes");
+                let status = child
+                    .lock()
+                    .ok()
+                    .and_then(|mut child| child.try_wait().ok().flatten());
+                kill_raw_zmodem_child(&child);
+                cancellation.detach_child();
+                let _ = stdout_handle.join();
+                let stderr_text = stderr.take().and_then(read_stderr_text);
+                let message = raw_upload_write_failure_message(
+                    &spec,
+                    transferred,
+                    &err,
+                    status,
+                    stderr_text.as_deref(),
+                );
+                log::warn!("{message}");
+                anyhow::bail!(message);
             }
             transferred += bytes_read as u64;
             uploaded_bytes += bytes_read as u64;
@@ -832,6 +863,29 @@ fn write_all_raw_upload_bytes(
         bytes = &bytes[chunk_len..];
     }
     Ok(())
+}
+
+fn raw_upload_write_failure_message(
+    spec: &RawUploadFileSpec,
+    transferred: u64,
+    error: &std::io::Error,
+    status: Option<ExitStatus>,
+    stderr: Option<&str>,
+) -> String {
+    let mut message = format!(
+        "failed to write raw ZMODEM upload bytes for {} after {transferred}/{} bytes: {error}",
+        spec.path.display(),
+        spec.size
+    );
+    if let Some(status) = status {
+        message.push_str("; remote helper exit code ");
+        message.push_str(&format_exit_status(status));
+    }
+    if let Some(stderr) = stderr.filter(|stderr| !stderr.is_empty()) {
+        message.push_str("; remote stderr: ");
+        message.push_str(stderr);
+    }
+    message
 }
 
 fn run_zmodem_download_with_child(
@@ -1066,7 +1120,7 @@ fn run_direct_ssh_raw_download_with_child(
                         return Ok(());
                     }
                     if status.success() {
-                        let downloaded_bytes = parser.persist_completed_files()?;
+                        let downloaded_bytes = parser.persist_completed_files(emit_event)?;
                         log_zmodem_side_channel_throughput(
                             "raw-download",
                             downloaded_bytes,
@@ -1284,12 +1338,12 @@ impl RawDownloadParser {
                     });
                     self.state = RawDownloadState::Body { remaining: size };
                     if size == 0 {
-                        self.finish_current_file(emit_event)?;
+                        self.finish_current_file()?;
                     }
                 }
                 RawDownloadState::Body { remaining } => {
                     if remaining == 0 {
-                        self.finish_current_file(emit_event)?;
+                        self.finish_current_file()?;
                         continue;
                     }
                     if self.buffer.is_empty() {
@@ -1333,24 +1387,14 @@ impl RawDownloadParser {
         }
     }
 
-    fn finish_current_file(
-        &mut self,
-        emit_event: &mut impl FnMut(ZmodemEvent),
-    ) -> anyhow::Result<()> {
+    fn finish_current_file(&mut self) -> anyhow::Result<()> {
         if let Some(mut file) = self.current_file.take() {
             file.temp_file.flush()?;
-            let name = file.name.clone();
-            let final_path = file.final_path.clone();
             self.completed_files.push(RawCompletedDownloadFile {
                 temp_file: file.temp_file,
-                name: name.clone(),
-                final_path: final_path.clone(),
+                name: file.name,
+                final_path: file.final_path,
                 size: file.size,
-            });
-            emit_event(ZmodemEvent::FileCompleted {
-                direction: ZmodemDirection::Download,
-                name,
-                path: Some(final_path),
             });
         }
         self.state = RawDownloadState::Header;
@@ -1376,7 +1420,10 @@ impl RawDownloadParser {
         unused_path_avoiding_reserved(&self.dest_dir, name, &reserved_paths)
     }
 
-    fn persist_completed_files(&mut self) -> anyhow::Result<u64> {
+    fn persist_completed_files(
+        &mut self,
+        emit_event: &mut impl FnMut(ZmodemEvent),
+    ) -> anyhow::Result<u64> {
         let mut total = 0u64;
         for file in self.completed_files.drain(..) {
             let final_path = file.final_path.clone();
@@ -1395,6 +1442,11 @@ impl RawDownloadParser {
                 file.name,
                 final_path.display()
             );
+            emit_event(ZmodemEvent::FileCompleted {
+                direction: ZmodemDirection::Download,
+                name: file.name,
+                path: Some(final_path),
+            });
         }
         Ok(total)
     }
@@ -1532,10 +1584,13 @@ fn kill_raw_zmodem_child(child: &Arc<Mutex<std::process::Child>>) {
 fn remote_raw_upload_command(
     cwd: Option<&str>,
     detect_remote_rz_cwd: bool,
+    remote_rz_token: Option<&str>,
     files: &[RawUploadFileSpec],
 ) -> String {
     let target = if let Some(cwd) = cwd.filter(|cwd| !cwd.is_empty()) {
         format!("target={}", shell_words::quote(cwd))
+    } else if let Some(token) = remote_rz_token {
+        format!("target=\"$({})\"", remote_rz_token_cwd_script(token))
     } else if detect_remote_rz_cwd {
         format!("target=\"$({REMOTE_RZ_CWD_SCRIPT})\"")
     } else {
@@ -1577,7 +1632,8 @@ fn remote_raw_download_command(source: &DirectSshZmodemDownloadSource) -> String
 
 const REMOTE_RAW_UPLOAD_STAGED_PREFIX: &str = concat!(
     r#"cd -- "$target" && target=$(pwd) && "#,
-    r#"tmp=$(mktemp -d ".warp-zmodem.XXXXXX") && tmp=$(cd -- "$tmp" && pwd) && "#,
+    r#"printf 'WARP_ZMODEM_TARGET=%s\n' "$target" >&2 && "#,
+    r#"tmp=$(mktemp -d ".warp-zmodem.XXXXXX") && tmp=$(cd -- "$tmp" && pwd) || exit 1; "#,
     r#"cleanup() { rm -rf -- "$tmp"; }; trap cleanup EXIT HUP INT TERM; "#,
     r#"receive_file() { size=$1; name=$2; "#,
     r#"case "$name" in ""|.|..|*/*) exit 2;; esac; "#,
@@ -1800,7 +1856,7 @@ fn spawn_controlmaster_remote_upload_stream(
     upload: &LegacySshZmodemUpload,
     files: &[RawUploadFileSpec],
 ) -> anyhow::Result<std::process::Child> {
-    let remote_command = remote_raw_upload_command(upload.cwd.as_deref(), false, files);
+    let remote_command = remote_raw_upload_command(upload.cwd.as_deref(), false, None, files);
     log::info!(
         "ZMODEM ControlMaster side-channel spawning raw upload helper: wsl_distro={:?}",
         upload.wsl_distro
@@ -1861,8 +1917,12 @@ fn spawn_direct_remote_upload_stream(
     upload: &DirectSshZmodemUpload,
     files: &[RawUploadFileSpec],
 ) -> anyhow::Result<(std::process::Child, DirectSshAuthGuard)> {
-    let remote_command =
-        remote_raw_upload_command(upload.cwd.as_deref(), upload.detect_remote_rz_cwd, files);
+    let remote_command = remote_raw_upload_command(
+        upload.cwd.as_deref(),
+        upload.detect_remote_rz_cwd,
+        upload.remote_rz_token.as_deref(),
+        files,
+    );
     let args = direct_ssh_args_for_remote_command(
         &upload.connection_info,
         upload.ssh_command.as_deref(),
@@ -2224,7 +2284,7 @@ fn remote_rz_command(cwd: Option<&str>, detect_remote_rz_cwd: bool) -> String {
 
 const REMOTE_RZ_STAGED_UPLOAD_SCRIPT: &str = concat!(
     r#"cd -- "$target" && target=$(pwd) && "#,
-    r#"tmp=$(mktemp -d ".warp-zmodem.XXXXXX") && tmp=$(cd -- "$tmp" && pwd) && "#,
+    r#"tmp=$(mktemp -d ".warp-zmodem.XXXXXX") && tmp=$(cd -- "$tmp" && pwd) || exit 1; "#,
     r#"cleanup() { rm -rf -- "$tmp"; }; trap cleanup EXIT HUP INT TERM; "#,
     r#"cd -- "$tmp" && "#,
     "rz -q -y",
@@ -2234,7 +2294,27 @@ const REMOTE_RZ_STAGED_UPLOAD_SCRIPT: &str = concat!(
     r#"trap - EXIT HUP INT TERM; cleanup"#,
 );
 
-const REMOTE_RZ_CWD_SCRIPT: &str = r#"for p in /proc/[0-9]*; do [ "$(basename "$(readlink "$p/exe" 2>/dev/null)" 2>/dev/null)" = rz ] || continue; cwd=$(readlink "$p/cwd" 2>/dev/null) || continue; [ -n "$cwd" ] && { printf '%s\n' "$cwd"; exit 0; }; done; pwd"#;
+const REMOTE_RZ_CWD_SCRIPT: &str = concat!(
+    r#"rz_cwd=; for p in /proc/[0-9]*; do "#,
+    r#"comm=$(cat "$p/comm" 2>/dev/null) || continue; "#,
+    r#"exe=$(basename "$(readlink "$p/exe" 2>/dev/null)" 2>/dev/null); "#,
+    r#"matched=; case "$comm" in rz|lrz) matched=1;; esac; "#,
+    r#"case "$exe" in rz|lrz) matched=1;; esac; "#,
+    r#"if [ -z "$matched" ]; then cmd0=$(tr '\000' '\n' < "$p/cmdline" 2>/dev/null | sed -n '1p'); cmd0=$(basename "$cmd0" 2>/dev/null); case "$cmd0" in rz|lrz) matched=1;; esac; fi; "#,
+    r#"[ -n "$matched" ] || continue; cwd=$(readlink "$p/cwd" 2>/dev/null) || continue; [ -n "$cwd" ] || continue; "#,
+    r#"if [ -n "$rz_cwd" ] && [ "$rz_cwd" != "$cwd" ]; then printf '%s\n' 'multiple active remote rz working directories; refusing to choose another SSH session' >&2; exit 1; fi; "#,
+    r#"rz_cwd=$cwd; done; "#,
+    r#"[ -n "$rz_cwd" ] || { printf '%s\n' 'no active remote rz process found' >&2; exit 1; }; "#,
+    r#"printf '%s\n' "$rz_cwd""#,
+);
+
+fn remote_rz_token_cwd_script(token: &str) -> String {
+    format!(
+        r#"expected_token={}; attempt=0; while [ "$attempt" -lt 100 ]; do for p in /proc/[0-9]*; do [ -r "$p/environ" ] || continue; tr '\000' '\n' < "$p/environ" 2>/dev/null | grep -Fqx "{}=$expected_token" || continue; cwd=$(readlink "$p/cwd" 2>/dev/null) || continue; [ -n "$cwd" ] || continue; printf '%s\n' "$cwd"; exit 0; done; attempt=$((attempt + 1)); sleep 0.1; done; printf '%s\n' 'no matching remote rz process found for drag-and-drop upload' >&2; exit 1"#,
+        shell_words::quote(token),
+        SSH_ZMODEM_REMOTE_RZ_TOKEN_ENV,
+    )
+}
 
 fn remote_sz_command(source: &DirectSshZmodemDownloadSource) -> String {
     match source {
@@ -2313,7 +2393,7 @@ pub fn test_direct_ssh_raw_upload_args(
         name: String::from("file.txt"),
         size: 1234,
     }];
-    let remote_command = remote_raw_upload_command(upload.cwd.as_deref(), false, &files);
+    let remote_command = remote_raw_upload_command(upload.cwd.as_deref(), false, None, &files);
     direct_ssh_args_for_remote_command(
         &upload.connection_info,
         upload.ssh_command.as_deref(),
@@ -2329,7 +2409,44 @@ pub fn test_controlmaster_raw_upload_command(cwd: Option<&str>) -> String {
         name: String::from("file.txt"),
         size: 1234,
     }];
-    remote_raw_upload_command(cwd, false, &files)
+    remote_raw_upload_command(cwd, false, None, &files)
+}
+
+#[cfg(test)]
+pub fn test_direct_ssh_raw_upload_args_with_remote_rz_token(
+    host: &str,
+    token: &str,
+) -> anyhow::Result<Vec<String>> {
+    let upload = DirectSshZmodemUpload::new(
+        InteractiveSshCommand {
+            host: Some(host.to_string()),
+            port: None,
+        },
+        None,
+        None,
+        None,
+        true,
+        ZmodemTransferPaths::upload(vec![PathBuf::from("file.txt")]),
+        None,
+    )?
+    .with_remote_rz_token(token.to_string());
+    let files = vec![RawUploadFileSpec {
+        path: PathBuf::from("file.txt"),
+        name: String::from("file.txt"),
+        size: 1234,
+    }];
+    let remote_command = remote_raw_upload_command(
+        upload.cwd.as_deref(),
+        upload.detect_remote_rz_cwd,
+        upload.remote_rz_token.as_deref(),
+        &files,
+    );
+    direct_ssh_args_for_remote_command(
+        &upload.connection_info,
+        upload.ssh_command.as_deref(),
+        &remote_command,
+        upload.auth_mode(),
+    )
 }
 
 #[cfg(test)]
@@ -2458,16 +2575,18 @@ pub fn test_direct_ssh_download_args_detecting_interactive_sz(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{
-        test_controlmaster_raw_upload_command, test_direct_ssh_args,
-        test_direct_ssh_args_from_active_command, test_direct_ssh_args_from_command,
-        test_direct_ssh_args_from_command_with_password_auth,
+        raw_upload_write_failure_message, test_controlmaster_raw_upload_command,
+        test_direct_ssh_args, test_direct_ssh_args_from_active_command,
+        test_direct_ssh_args_from_command, test_direct_ssh_args_from_command_with_password_auth,
         test_direct_ssh_args_with_password_auth,
         test_direct_ssh_download_args_detecting_interactive_sz,
         test_direct_ssh_download_args_from_command, test_direct_ssh_raw_download_args_from_command,
-        test_direct_ssh_raw_upload_args, test_remote_rz_command,
-        test_remote_rz_command_with_detection, test_sanitize_stderr,
-        test_timeout_message_without_stderr,
+        test_direct_ssh_raw_upload_args, test_direct_ssh_raw_upload_args_with_remote_rz_token,
+        test_remote_rz_command, test_remote_rz_command_with_detection, test_sanitize_stderr,
+        test_timeout_message_without_stderr, RawUploadFileSpec,
     };
     use crate::terminal::zmodem::{ZmodemDirection, ZmodemEvent};
 
@@ -2483,13 +2602,47 @@ mod tests {
     }
 
     #[test]
-    fn remote_rz_command_can_detect_interactive_receiver_cwd() {
+    fn remote_rz_command_only_uses_an_unambiguous_receiver_cwd() {
         let command = test_remote_rz_command_with_detection();
 
         assert!(command.starts_with("target=\"$("));
         assert!(command.contains(r#"/proc/[0-9]*"#));
-        assert!(command.contains("readlink \"$p/cwd\""));
+        assert!(command.contains("cat \"$p/comm\""));
+        assert!(command.contains("case \"$comm\" in rz|lrz"));
+        assert!(command.contains("case \"$exe\" in rz|lrz"));
+        assert!(command.contains("tr '\\000' '\\n'"));
+        assert!(command.contains("cwd=$(readlink \"$p/cwd\""));
+        assert!(command.contains("multiple active remote rz working directories"));
+        assert!(command.contains("no active remote rz process found"));
+        assert!(!command.contains("shell_pid"));
+        assert!(!command.contains(r#"readlink "$p/fd/0""#));
+        assert!(!command.contains(r#"/dev/pts/*"#));
+        assert!(!command.contains("done; pwd"));
         assert_remote_rz_command_stages_then_commits(&command);
+    }
+
+    #[test]
+    fn raw_upload_write_failure_includes_source_and_remote_stderr() {
+        let spec = RawUploadFileSpec {
+            path: PathBuf::from("H:\\Downloads\\payload.bin"),
+            name: String::from("payload.bin"),
+            size: 4096,
+        };
+        let error = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "simulated broken pipe");
+
+        let message = raw_upload_write_failure_message(
+            &spec,
+            1024,
+            &error,
+            None,
+            Some("WARP_ZMODEM_TARGET=/tmp\ndd: failed to write: No space left on device"),
+        );
+
+        assert!(message.contains("H:\\Downloads\\payload.bin"));
+        assert!(message.contains("1024/4096 bytes"));
+        assert!(message.contains("simulated broken pipe"));
+        assert!(message.contains("WARP_ZMODEM_TARGET=/tmp"));
+        assert!(message.contains("No space left on device"));
     }
 
     #[test]
@@ -2551,7 +2704,12 @@ mod tests {
 
         assert!(!remote_command.contains("C:\\Users\\lc"));
         assert!(remote_command.contains(r#"/proc/[0-9]*"#));
-        assert!(remote_command.contains("readlink \"$p/cwd\""));
+        assert!(remote_command.contains("case \"$comm\" in rz|lrz"));
+        assert!(remote_command.contains("tr '\\000' '\\n'"));
+        assert!(remote_command.contains("multiple active remote rz working directories"));
+        assert!(remote_command.contains("no active remote rz process found"));
+        assert!(!remote_command.contains(r#"/dev/pts/*"#));
+        assert!(!remote_command.contains("done; pwd"));
         assert_remote_rz_command_stages_then_commits(remote_command);
         assert_eq!(args[args.len() - 2], "alkaid@alkaid-5070");
     }
@@ -2613,6 +2771,7 @@ mod tests {
 
     fn assert_remote_rz_command_stages_then_commits(command: &str) {
         assert!(command.contains(r#"mktemp -d ".warp-zmodem.XXXXXX""#));
+        assert!(command.contains(r#"tmp=$(cd -- "$tmp" && pwd) || exit 1; cleanup()"#));
         assert!(command.contains(r#"trap cleanup EXIT HUP INT TERM"#));
         assert!(command.contains(r#"cd -- "$tmp" && rz -q -y"#));
         assert!(command.contains("ZMODEM upload target already exists"));
@@ -2630,6 +2789,8 @@ mod tests {
         assert!(remote_command.starts_with("target=/tmp && "));
         assert!(remote_command.contains(r#"mktemp -d ".warp-zmodem.XXXXXX""#));
         assert!(remote_command.contains(r#"trap cleanup EXIT HUP INT TERM"#));
+        assert!(remote_command.contains(r#"tmp=$(cd -- "$tmp" && pwd) || exit 1; cleanup()"#));
+        assert!(remote_command.contains("WARP_ZMODEM_TARGET=%s"));
         assert!(remote_command.contains("WARP_ZMODEM_READY"));
         assert!(remote_command.contains("WARP_ZMODEM_STAGED"));
         assert!(remote_command.contains("receive_file 1234 file.txt"));
@@ -2658,6 +2819,26 @@ mod tests {
                 < remote_command.find("WARP_ZMODEM_COMMIT").unwrap()
         );
         assert!(!remote_command.contains("rz -q -y"));
+    }
+
+    #[test]
+    fn direct_ssh_drag_upload_matches_only_the_token_bound_remote_rz() {
+        let args = test_direct_ssh_raw_upload_args_with_remote_rz_token(
+            "user@example.com",
+            "0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let remote_command = args.last().unwrap();
+
+        assert!(remote_command.contains("expected_token=0123456789abcdef0123456789abcdef"));
+        assert!(remote_command.contains(r#"/proc/[0-9]*"#));
+        assert!(remote_command.contains(r#""$p/environ""#));
+        assert!(remote_command.contains(r#"grep -Fqx "WARP_ZMODEM_TOKEN=$expected_token""#));
+        assert!(remote_command.contains(r#"attempt=$((attempt + 1))"#));
+        assert!(remote_command.contains("no matching remote rz process found"));
+        assert!(!remote_command.contains(r#"/dev/pts/*"#));
+        assert!(remote_command.contains("WARP_ZMODEM_READY"));
+        assert!(remote_command.contains("receive_file 1234 file.txt"));
     }
 
     #[test]
@@ -2783,27 +2964,39 @@ mod tests {
 
         assert!(!dir.path().join("remote.txt").exists());
         assert_eq!(zmodem_temp_paths(dir.path()).len(), 1);
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            ZmodemEvent::FileCompleted {
+                direction: ZmodemDirection::Download,
+                ..
+            }
+        )));
+
+        parser
+            .append(b"done\n", &mut |event| events.push(event))
+            .unwrap();
+        assert!(parser.completed);
+        assert_eq!(
+            parser
+                .persist_completed_files(&mut |event| events.push(event))
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("remote.txt")).unwrap(),
+            b"hello"
+        );
+        assert!(zmodem_temp_paths(dir.path()).is_empty());
         assert!(events.iter().any(|event| {
             matches!(
                 event,
                 ZmodemEvent::FileCompleted {
                     direction: ZmodemDirection::Download,
                     name,
-                    ..
-                } if name == "remote.txt"
+                    path: Some(path),
+                } if name == "remote.txt" && path.exists()
             )
         }));
-
-        parser
-            .append(b"done\n", &mut |event| events.push(event))
-            .unwrap();
-        assert!(parser.completed);
-        assert_eq!(parser.persist_completed_files().unwrap(), 5);
-        assert_eq!(
-            std::fs::read(dir.path().join("remote.txt")).unwrap(),
-            b"hello"
-        );
-        assert!(zmodem_temp_paths(dir.path()).is_empty());
     }
 
     #[test]
@@ -2854,7 +3047,7 @@ mod tests {
             .append(b"file 3 10\nremote.txttwo", &mut |_| {})
             .unwrap();
         parser.append(b"done\n", &mut |_| {}).unwrap();
-        parser.persist_completed_files().unwrap();
+        parser.persist_completed_files(&mut |_| {}).unwrap();
 
         assert_eq!(
             std::fs::read(dir.path().join("remote.txt")).unwrap(),
@@ -2874,10 +3067,9 @@ mod tests {
 
         let err = parser.append(&oversized_header, &mut |_| {}).unwrap_err();
 
-        assert!(
-            err.to_string()
-                .contains("raw ZMODEM download header exceeded")
-        );
+        assert!(err
+            .to_string()
+            .contains("raw ZMODEM download header exceeded"));
         assert!(zmodem_temp_paths(dir.path()).is_empty());
     }
 
@@ -2892,10 +3084,9 @@ mod tests {
 
         let err = parser.append(header.as_bytes(), &mut |_| {}).unwrap_err();
 
-        assert!(
-            err.to_string()
-                .contains("raw ZMODEM download file name exceeded")
-        );
+        assert!(err
+            .to_string()
+            .contains("raw ZMODEM download file name exceeded"));
         assert!(zmodem_temp_paths(dir.path()).is_empty());
     }
 
@@ -2910,10 +3101,9 @@ mod tests {
 
         let err = parser.append(header.as_bytes(), &mut |_| {}).unwrap_err();
 
-        assert!(
-            err.to_string()
-                .contains("raw ZMODEM download file exceeded")
-        );
+        assert!(err
+            .to_string()
+            .contains("raw ZMODEM download file exceeded"));
         assert!(zmodem_temp_paths(dir.path()).is_empty());
     }
 
@@ -2926,10 +3116,9 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            err.to_string()
-                .contains("raw ZMODEM download total size exceeded")
-        );
+        assert!(err
+            .to_string()
+            .contains("raw ZMODEM download total size exceeded"));
     }
 
     #[test]

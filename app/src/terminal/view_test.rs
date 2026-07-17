@@ -8,7 +8,7 @@ use crate::ai::agent::conversation::ConversationStatus;
 use parking_lot::FairMutex;
 use warp_multi_agent_api as api;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START};
-use warpui::{Presenter, WindowInvalidation, notification::UserNotification};
+use warpui::{notification::UserNotification, Presenter, WindowInvalidation};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::task::TaskId;
@@ -35,10 +35,9 @@ use crate::settings::{AISettings, AppEditorSettings, WarpPromptSeparator};
 
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, InputConfig, InputType, agent_view::AgentViewEntryOrigin,
+    agent_view::AgentViewEntryOrigin, BlocklistAIHistoryModel, InputConfig, InputType,
 };
 use crate::features::FeatureFlag;
-use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::event::{
     CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType,
 };
@@ -48,6 +47,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
 use crate::terminal::zmodem::{ZmodemDirection, ZmodemEvent};
+use crate::terminal::CLIAgent;
 
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
@@ -110,27 +110,21 @@ fn zmodem_awaiting_upload_drag_drop_emits_upload_paths() {
 
 #[test]
 fn zmodem_failed_transfer_does_not_auto_hide() {
-    assert!(
-        !ZmodemTransferViewState::Failed {
-            direction: Some(ZmodemDirection::Upload),
-            message: String::from("ssh failed"),
-        }
-        .should_auto_hide()
-    );
-    assert!(
-        ZmodemTransferViewState::Completed {
-            direction: ZmodemDirection::Upload,
-            file_name: None,
-            path: None,
-        }
-        .should_auto_hide()
-    );
-    assert!(
-        ZmodemTransferViewState::Cancelled {
-            direction: ZmodemDirection::Upload,
-        }
-        .should_auto_hide()
-    );
+    assert!(!ZmodemTransferViewState::Failed {
+        direction: Some(ZmodemDirection::Upload),
+        message: String::from("ssh failed"),
+    }
+    .should_auto_hide());
+    assert!(ZmodemTransferViewState::Completed {
+        direction: ZmodemDirection::Upload,
+        file_name: None,
+        path: None,
+    }
+    .should_auto_hide());
+    assert!(ZmodemTransferViewState::Cancelled {
+        direction: ZmodemDirection::Upload,
+    }
+    .should_auto_hide());
 }
 
 #[test]
@@ -156,7 +150,7 @@ fn zmodem_transfer_detail_includes_speed() {
     let detail = zmodem_transfer_detail_for_state(&view_state);
 
     assert!(detail.contains("2.0 KB / 4.0 KB (50%)"));
-    assert!(detail.contains("KB/s"));
+    assert!(detail.contains("/s"));
 }
 
 #[cfg(windows)]
@@ -359,6 +353,14 @@ fn zmodem_upload_in_legacy_ssh_session_uses_controlmaster_side_channel() {
             );
         });
 
+        assert_eq!(*silent_aborts.borrow(), 0);
+        terminal.update(&mut app, |view, ctx| {
+            let generation = view
+                .active_ssh_zmodem_generation
+                .expect("ControlMaster upload should start an SSH side-channel");
+            view.handle_ssh_zmodem_event(generation, &ZmodemEvent::AbortInteractiveReceiver, ctx);
+        });
+
         let emitted_zmodem_paths = emitted_zmodem_paths.borrow();
         assert!(emitted_zmodem_paths.is_empty());
         assert_eq!(*silent_aborts.borrow(), 1);
@@ -416,6 +418,14 @@ fn zmodem_upload_uses_controlmaster_when_only_model_active_session_is_legacy_ssh
                 ])),
                 ctx,
             );
+        });
+
+        assert_eq!(*silent_aborts.borrow(), 0);
+        terminal.update(&mut app, |view, ctx| {
+            let generation = view
+                .active_ssh_zmodem_generation
+                .expect("ControlMaster upload should start an SSH side-channel");
+            view.handle_ssh_zmodem_event(generation, &ZmodemEvent::AbortInteractiveReceiver, ctx);
         });
 
         assert!(emitted_zmodem_paths.borrow().is_empty());
@@ -484,6 +494,14 @@ fn zmodem_upload_uses_parent_legacy_ssh_session_for_spawned_remote_session() {
                 ])),
                 ctx,
             );
+        });
+
+        assert_eq!(*silent_aborts.borrow(), 0);
+        terminal.update(&mut app, |view, ctx| {
+            let generation = view
+                .active_ssh_zmodem_generation
+                .expect("parent ControlMaster upload should start an SSH side-channel");
+            view.handle_ssh_zmodem_event(generation, &ZmodemEvent::AbortInteractiveReceiver, ctx);
         });
 
         assert!(emitted_zmodem_paths.borrow().is_empty());
@@ -634,15 +652,10 @@ fn zmodem_direct_upload_context_carries_ssh_manager_auth() {
             );
         });
 
-        terminal.read(&app, |view, ctx| {
-            let context = direct_ssh_zmodem_upload_context(
-                &[1.into()],
-                view.sessions.as_ref(ctx),
-                None,
-                &view.ssh_manager_zmodem_auth_by_session,
-                None,
-            )
-            .expect("direct ssh context should use subshell metadata");
+        terminal.read(&app, |view, _ctx| {
+            let context = view
+                .direct_ssh_zmodem_context_from_active_command(&[1.into()])
+                .expect("direct ssh context should use the active command");
             let auth = context
                 .ssh_manager_auth
                 .expect("SSH Manager auth should be carried with session context");
@@ -822,14 +835,12 @@ fn zmodem_direct_ssh_auth_fallback_requires_matching_port() {
         secret_kind: warp_ssh_manager::SecretKind::Password,
     };
 
-    assert!(
-        find_ssh_manager_zmodem_auth_context_from_servers(
-            &connection_info,
-            "ssh -p 2222 alkaid@alkaid-5070",
-            [(server, resolved_auth)],
-        )
-        .is_none()
-    );
+    assert!(find_ssh_manager_zmodem_auth_context_from_servers(
+        &connection_info,
+        "ssh -p 2222 alkaid@alkaid-5070",
+        [(server, resolved_auth)],
+    )
+    .is_none());
 }
 
 #[cfg(windows)]
@@ -1029,8 +1040,81 @@ fn zmodem_upload_in_active_ssh_command_without_remote_session_uses_direct_ssh_si
             );
         });
 
+        assert_eq!(*silent_aborts.borrow(), 0);
+        terminal.update(&mut app, |view, ctx| {
+            let generation = view
+                .active_ssh_zmodem_generation
+                .expect("direct SSH upload should start a side-channel");
+            view.handle_ssh_zmodem_event(generation, &ZmodemEvent::AbortInteractiveReceiver, ctx);
+        });
+
         assert!(emitted_zmodem_paths.borrow().is_empty());
         assert_eq!(*silent_aborts.borrow(), 1);
+    })
+}
+
+#[cfg(windows)]
+#[test]
+fn zmodem_drag_drop_in_active_ssh_command_starts_token_bound_rz() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes = Rc::new(RefCell::new(Vec::new()));
+        let pty_writes_clone = pty_writes.clone();
+        let _lrzsz = FeatureFlag::Lrzsz.override_enabled(true);
+        let _ssh_drag_and_drop = FeatureFlag::SshDragAndDrop.override_enabled(false);
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    pty_writes_clone.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model
+                .lock()
+                .simulate_long_running_block("ssh user@example.com", "ready");
+            view.handle_action(
+                &TerminalAction::DragAndDropFiles(vec![String::from("H:\\Downloads\\ddl.sql")]),
+                ctx,
+            );
+        });
+
+        let writes = pty_writes.borrow();
+        assert_eq!(writes.len(), 1);
+        let command = std::str::from_utf8(&writes[0]).unwrap();
+        let prefix = "\u{15}env WARP_ZMODEM_TOKEN=";
+        assert!(command.starts_with(prefix));
+        assert!(command.ends_with(" rz\r"));
+        let token = command
+            .strip_prefix(prefix)
+            .and_then(|command| command.strip_suffix(" rz\r"))
+            .unwrap();
+        assert_eq!(token.len(), 32);
+        assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        drop(writes);
+
+        terminal.update(&mut app, |view, ctx| {
+            let generation = view
+                .active_ssh_zmodem_generation
+                .expect("drag-and-drop upload should start a side-channel");
+            view.handle_zmodem_event(&ZmodemEvent::UploadRequested, ctx);
+            assert_eq!(view.active_ssh_zmodem_generation, Some(generation));
+            assert!(matches!(
+                view.zmodem_transfer,
+                ZmodemTransferViewState::UploadStarting
+            ));
+            assert!(view.auto_started_ssh_zmodem_receiver);
+            view.handle_ssh_zmodem_event(generation, &ZmodemEvent::AbortInteractiveReceiver, ctx);
+            assert!(!view.auto_started_ssh_zmodem_receiver);
+        });
+
+        assert_eq!(
+            pty_writes.borrow().last().unwrap(),
+            &[warp_terminal::model::escape_sequences::C0::ETX]
+        );
     })
 }
 
@@ -1825,9 +1909,7 @@ fn exiting_restored_cli_subagent_agent_view_inserts_entry_card() {
     });
 }
 
-fn assert_exiting_restored_ordinary_agent_view_inserts_entry_card(
-    origin: AgentViewEntryOrigin,
-) {
+fn assert_exiting_restored_ordinary_agent_view_inserts_entry_card(origin: AgentViewEntryOrigin) {
     App::test((), move |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         FeatureFlag::AgentView.set_enabled(true);
@@ -1881,10 +1963,8 @@ fn skips_cli_subagent_view_restore_without_matching_ai_metadata() {
 
         let block_id = BlockId::from("cli-block-1".to_string());
         let task_id = TaskId::new("cli-task-1".to_string());
-        let conversation = build_restored_conversation_with_cli_subagent_for_test(
-            block_id.clone(),
-            task_id,
-        );
+        let conversation =
+            build_restored_conversation_with_cli_subagent_for_test(block_id.clone(), task_id);
         let mut serialized_blocks =
             serialized_blocks_for_restored_cli_subagent_for_test(&conversation);
         clear_ai_metadata_for_serialized_blocks_for_test(&mut serialized_blocks);
@@ -1945,7 +2025,9 @@ fn finished_cli_subagent_keeps_read_only_card_when_metadata_matches() {
         initialize_app_for_terminal_view(&mut app);
         // FinishedSubagent 会触发 sidecar 持久化，需要 GlobalResourceHandlesProvider。
         let global_resource_handles = crate::GlobalResourceHandles::mock(&mut app);
-        app.add_singleton_model(|_| crate::GlobalResourceHandlesProvider::new(global_resource_handles));
+        app.add_singleton_model(|_| {
+            crate::GlobalResourceHandlesProvider::new(global_resource_handles)
+        });
 
         // 先恢复一个带 CLI subagent 的历史会话，建立带匹配 metadata 的 command block
         // 和一个 RestoredReadOnly 视图，模拟 SSH 会话在 agent view 里展开后的状态。
@@ -2286,11 +2368,9 @@ fn unregister_cli_agent_session_restores_unlocked_input_config() {
                 sessions.remove_session(view.view_id, ctx);
             });
             assert!(!view.has_active_cli_agent_input_session(ctx));
-            assert!(
-                CLIAgentSessionsModel::as_ref(ctx)
-                    .session(view.view_id)
-                    .is_none()
-            );
+            assert!(CLIAgentSessionsModel::as_ref(ctx)
+                .session(view.view_id)
+                .is_none());
         });
 
         terminal.read(&app, |view, ctx| {
@@ -2406,12 +2486,10 @@ fn root_ambient_agent_pane_sets_root_ambient_agent_context_key() {
         let terminal = add_window_with_terminal(&mut app, None);
 
         terminal.read(&app, |view, ctx| {
-            assert!(
-                !view
-                    .keymap_context(ctx)
-                    .set
-                    .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY)
-            );
+            assert!(!view
+                .keymap_context(ctx)
+                .set
+                .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY));
         });
 
         terminal.update(&mut app, |view, ctx| {
@@ -2421,11 +2499,10 @@ fn root_ambient_agent_pane_sets_root_ambient_agent_context_key() {
         });
 
         terminal.read(&app, |view, ctx| {
-            assert!(
-                view.keymap_context(ctx)
-                    .set
-                    .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY)
-            );
+            assert!(view
+                .keymap_context(ctx)
+                .set
+                .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY));
         });
 
         terminal.update(&mut app, |view, ctx| {
@@ -2435,12 +2512,10 @@ fn root_ambient_agent_pane_sets_root_ambient_agent_context_key() {
         });
 
         terminal.read(&app, |view, ctx| {
-            assert!(
-                !view
-                    .keymap_context(ctx)
-                    .set
-                    .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY)
-            );
+            assert!(!view
+                .keymap_context(ctx)
+                .set
+                .contains(init::ROOT_AMBIENT_AGENT_PANE_KEY));
         });
     });
 }
@@ -2478,8 +2553,8 @@ fn test_clear_session_flag_state() {
     use warp_terminal::shell::ShellType;
 
     use crate::ai::blocklist::SerializedBlockListItem;
-    use crate::terminal::ShellHost;
     use crate::terminal::model::block::SerializedBlock;
+    use crate::terminal::ShellHost;
 
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -2546,11 +2621,9 @@ fn test_clear_session_flag_state() {
 }
 
 fn assert_block_has_find_match(find_model: &TerminalFindModel, block_index: BlockIndex) {
-    assert!(
-        find_model
-            .block_list_find_run()
-            .is_some_and(|run| run.matches_for_block(block_index).next().is_some())
-    );
+    assert!(find_model
+        .block_list_find_run()
+        .is_some_and(|run| run.matches_for_block(block_index).next().is_some()));
 }
 
 impl TerminalView {
@@ -3401,12 +3474,10 @@ fn test_stable_scrolling_during_grid_truncation() {
                 // Create a dummy, finished block and a long-running block.
                 model.simulate_block("ls", "foo");
                 model.simulate_long_running_block("cat", "");
-                assert!(
-                    model
-                        .block_list()
-                        .active_block()
-                        .is_active_and_long_running()
-                );
+                assert!(model
+                    .block_list()
+                    .active_block()
+                    .is_active_and_long_running());
 
                 // Add enough newlines so that the long-running block spans at
                 // least the viewport and surely exceeds the grid size.
@@ -5169,13 +5240,12 @@ fn inline_agent_view_exits_when_tagged_in_long_running_command_is_tagged_out() {
                 .set_is_agent_tagged_in(true);
 
             assert!(view.agent_view_controller().as_ref(ctx).is_inline());
-            assert!(
-                view.model
-                    .lock()
-                    .block_list()
-                    .active_block()
-                    .is_agent_tagged_in()
-            );
+            assert!(view
+                .model
+                .lock()
+                .block_list()
+                .active_block()
+                .is_agent_tagged_in());
 
             let model = view.model.lock();
             assert!(view.is_input_box_visible(&model, ctx));
@@ -5373,12 +5443,10 @@ fn use_agent_footer_renders_for_transfer_handoff_even_when_user_command_footer_s
                 let model = view.model.lock();
                 assert!(!view.should_render_use_agent_footer(&model, ctx));
                 let active_block_index = model.block_list().active_block_index();
-                assert!(
-                    model
-                        .block_list()
-                        .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
-                        .is_none()
-                );
+                assert!(model
+                    .block_list()
+                    .last_non_hidden_rich_content_block_after_block(Some(active_block_index))
+                    .is_none());
             }
 
             let conversation_id = view.agent_view_controller().update(ctx, |controller, ctx| {
@@ -6610,20 +6678,18 @@ fn ctrl_c_does_not_accept_prompt_suggestion_banner() {
                 ctx,
             );
 
-            assert!(
-                view.inline_banners_state
-                    .prompt_suggestions_banner
-                    .is_some()
-            );
+            assert!(view
+                .inline_banners_state
+                .prompt_suggestions_banner
+                .is_some());
 
             // Ctrl-C should not accept the prompt suggestion.
             view.handle_action(&TerminalAction::CtrlC, ctx);
 
-            assert!(
-                view.inline_banners_state
-                    .prompt_suggestions_banner
-                    .is_some()
-            );
+            assert!(view
+                .inline_banners_state
+                .prompt_suggestions_banner
+                .is_some());
         });
     })
 }
@@ -6707,12 +6773,11 @@ fn linear_deeplink_does_not_auto_submit_when_already_in_agent_view() {
         });
 
         terminal.read(&app, |view, ctx| {
-            assert!(
-                view.agent_view_controller()
-                    .as_ref(ctx)
-                    .agent_view_state()
-                    .is_fullscreen()
-            );
+            assert!(view
+                .agent_view_controller()
+                .as_ref(ctx)
+                .agent_view_state()
+                .is_fullscreen());
         });
 
         // Now dispatch the Linear deeplink while already in fullscreen agent view.
@@ -6817,8 +6882,8 @@ fn linear_deeplink_via_default_entrypoint_does_not_auto_submit_in_fullscreen() {
 // 不需要构造 TerminalView / ctx。skim 算法的 Unicode 处理由 fuzzy_match
 // crate 负责,这里只验证我们在 view.rs 中对它的使用是否符合预期。
 
-use super::OnekeyMenuRows;
 use super::filter_and_sort_onekey_candidates;
+use super::OnekeyMenuRows;
 
 fn rows_indices(rows: OnekeyMenuRows) -> Vec<usize> {
     match rows {

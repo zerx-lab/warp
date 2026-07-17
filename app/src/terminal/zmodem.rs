@@ -425,8 +425,10 @@ impl UploadSession {
 
         let size = u32::try_from(file.size).map_err(|_| {
             anyhow::anyhow!(
-                "file is too large for this ZMODEM implementation: {}",
-                file.path.display()
+                "ZMODEM upload only supports files up to {} bytes; {} is {} bytes",
+                u32::MAX,
+                file.path.display(),
+                file.size
             )
         })?;
         self.current_file = Some(File::open(&file.path)?);
@@ -723,21 +725,15 @@ impl DownloadSession {
                     Event::FileCompleted => {
                         if let Some(mut file) = self.current_file.take() {
                             file.temp_file.flush()?;
-                            let final_path = file.final_path.clone();
                             self.completed_files.push(CompletedDownloadFile {
                                 temp_file: file.temp_file,
-                                name: file.name.clone(),
-                                final_path: final_path.clone(),
-                            });
-                            emit_event(ZmodemEvent::FileCompleted {
-                                direction: ZmodemDirection::Download,
                                 name: file.name,
-                                path: Some(final_path),
+                                final_path: file.final_path,
                             });
                         }
                     }
                     Event::SessionCompleted => {
-                        self.persist_completed_files()?;
+                        self.persist_completed_files(emit_event)?;
                         self.completed = true;
                         emit_event(ZmodemEvent::Completed {
                             direction: ZmodemDirection::Download,
@@ -791,7 +787,10 @@ impl DownloadSession {
         unused_path_avoiding(&self.dest_dir, name, &reserved_paths)
     }
 
-    fn persist_completed_files(&mut self) -> anyhow::Result<()> {
+    fn persist_completed_files(
+        &mut self,
+        emit_event: &mut impl FnMut(ZmodemEvent),
+    ) -> anyhow::Result<()> {
         for file in self.completed_files.drain(..) {
             let final_path = file.final_path.clone();
             file.temp_file
@@ -808,6 +807,11 @@ impl DownloadSession {
                 file.name,
                 final_path.display()
             );
+            emit_event(ZmodemEvent::FileCompleted {
+                direction: ZmodemDirection::Download,
+                name: file.name,
+                path: Some(final_path),
+            });
         }
         Ok(())
     }

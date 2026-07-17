@@ -15,16 +15,16 @@ use mio::{self, Events, Interest};
 use parking_lot::{FairMutex, FairMutexGuard};
 
 use crate::terminal::{
-    TerminalModel, event_listener::ChannelEventListener, local_tty, model::ansi,
-};
-use crate::terminal::{
     event::Event as TerminalEvent,
     model::terminal_model::ExitReason,
     writeable_pty::Message,
     zmodem::{
-        PendingZmodemSession, ZmodemDetector, ZmodemDetectorResult, ZmodemDirection, ZmodemEvent,
-        ZmodemSession, ZmodemTransferPaths, zmodem_error_event,
+        zmodem_error_event, PendingZmodemSession, ZmodemDetector, ZmodemDetectorResult,
+        ZmodemDirection, ZmodemEvent, ZmodemSession, ZmodemTransferPaths,
     },
+};
+use crate::terminal::{
+    event_listener::ChannelEventListener, local_tty, model::ansi, TerminalModel,
 };
 
 use super::mio_channel::Receiver;
@@ -86,6 +86,7 @@ pub struct State {
     parser: ansi::Processor,
     zmodem: ZmodemState,
     zmodem_detector: ZmodemDetector,
+    zmodem_drag_command_echo: Option<ZmodemDragCommandEchoSuppressor>,
 }
 
 impl Default for State {
@@ -96,7 +97,56 @@ impl Default for State {
             writing: None,
             zmodem: ZmodemState::Inactive,
             zmodem_detector: ZmodemDetector::default(),
+            zmodem_drag_command_echo: None,
         }
+    }
+}
+
+#[derive(Debug)]
+struct ZmodemDragCommandEchoSuppressor {
+    command: Vec<u8>,
+    pending: Vec<u8>,
+}
+
+impl ZmodemDragCommandEchoSuppressor {
+    fn from_pty_input(input: &[u8]) -> Option<Self> {
+        let command = input.strip_prefix(b"\x15")?.strip_suffix(b"\r")?;
+        let token = command
+            .strip_prefix(b"env WARP_ZMODEM_TOKEN=")?
+            .strip_suffix(b" rz")?;
+        if token.len() != 32 || !token.iter().all(u8::is_ascii_hexdigit) {
+            return None;
+        }
+        Some(Self {
+            command: command.to_vec(),
+            pending: Vec::new(),
+        })
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
+        self.pending.extend_from_slice(bytes);
+        if let Some(start) = self
+            .pending
+            .windows(self.command.len())
+            .position(|window| window == self.command)
+        {
+            let mut output = self.pending[..start].to_vec();
+            output.extend_from_slice(&self.pending[start + self.command.len()..]);
+            self.pending.clear();
+            return (output, true);
+        }
+
+        let max_len = self.pending.len().min(self.command.len() - 1);
+        let keep_len = (1..=max_len)
+            .rev()
+            .find(|len| {
+                self.command
+                    .starts_with(&self.pending[self.pending.len() - len..])
+            })
+            .unwrap_or(0);
+        let ordinary_len = self.pending.len() - keep_len;
+        let output = self.pending.drain(..ordinary_len).collect();
+        (output, false)
     }
 }
 
@@ -199,6 +249,11 @@ where
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Message::Input(input) => {
+                    if let Some(suppressor) =
+                        ZmodemDragCommandEchoSuppressor::from_pty_input(&input)
+                    {
+                        state.zmodem_drag_command_echo = Some(suppressor);
+                    }
                     state.write_list.push_back(PendingWrite {
                         source: WriteSource::UserInput,
                         bytes: input,
@@ -261,6 +316,7 @@ where
     }
 
     fn abort_zmodem_silently(state: &mut State) {
+        state.zmodem_drag_command_echo = None;
         let previous = std::mem::replace(&mut state.zmodem, ZmodemState::Inactive);
         match previous {
             ZmodemState::Pending(pending) => {
@@ -385,6 +441,18 @@ where
         state: &mut State,
         bytes: &[u8],
     ) -> Vec<u8> {
+        let filtered_bytes;
+        let bytes = if let Some(suppressor) = &mut state.zmodem_drag_command_echo {
+            let (output, matched) = suppressor.push(bytes);
+            if matched {
+                state.zmodem_drag_command_echo = None;
+            }
+            filtered_bytes = output;
+            filtered_bytes.as_slice()
+        } else {
+            bytes
+        };
+
         match &mut state.zmodem {
             ZmodemState::Inactive => {
                 if warp_core::features::FeatureFlag::Lrzsz.is_enabled() {
@@ -400,6 +468,7 @@ where
                                 zmodem_input.len(),
                                 ordinary_output.len()
                             );
+                            state.zmodem_drag_command_echo = None;
                             state.zmodem = ZmodemState::Pending(PendingZmodemSession::new(
                                 detection.direction,
                                 &zmodem_input,

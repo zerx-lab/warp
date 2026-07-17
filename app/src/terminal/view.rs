@@ -3104,6 +3104,8 @@ pub struct TerminalView {
     #[cfg(all(windows, feature = "local_tty"))]
     active_ssh_zmodem_generation: Option<u64>,
     #[cfg(all(windows, feature = "local_tty"))]
+    auto_started_ssh_zmodem_receiver: bool,
+    #[cfg(all(windows, feature = "local_tty"))]
     legacy_ssh_zmodem_upload: Option<LegacySshZmodemUploadTask>,
 
     /// The type of the shell that this terminal pane is running, derived and
@@ -4474,6 +4476,8 @@ impl TerminalView {
             zmodem_transfer_generation: 0,
             #[cfg(all(windows, feature = "local_tty"))]
             active_ssh_zmodem_generation: None,
+            #[cfg(all(windows, feature = "local_tty"))]
+            auto_started_ssh_zmodem_receiver: false,
             #[cfg(all(windows, feature = "local_tty"))]
             legacy_ssh_zmodem_upload: None,
             most_recent_command_correction: None,
@@ -11615,6 +11619,18 @@ impl TerminalView {
     fn handle_zmodem_event(&mut self, event: &ZmodemEvent, ctx: &mut ViewContext<Self>) {
         match event {
             ZmodemEvent::UploadRequested => {
+                #[cfg(all(windows, feature = "local_tty"))]
+                if self.active_ssh_zmodem_generation.is_some()
+                    && matches!(
+                        self.zmodem_transfer,
+                        ZmodemTransferViewState::UploadStarting
+                    )
+                {
+                    log::info!(
+                        "ignoring ZMODEM upload request from auto-started drag-and-drop receiver"
+                    );
+                    return;
+                }
                 self.advance_zmodem_transfer_generation();
                 self.zmodem_transfer = ZmodemTransferViewState::AwaitingUpload;
                 self.open_zmodem_upload_picker(ctx);
@@ -11627,6 +11643,10 @@ impl TerminalView {
                 ctx.notify();
             }
             ZmodemEvent::AbortInteractiveReceiver => {
+                #[cfg(all(windows, feature = "local_tty"))]
+                if self.abort_auto_started_ssh_zmodem_receiver(ctx) {
+                    return;
+                }
                 ctx.emit(Event::AbortZmodemSilently);
             }
             ZmodemEvent::Started { direction } => {
@@ -11719,6 +11739,8 @@ impl TerminalView {
             }
             ZmodemEvent::Completed { direction } => {
                 #[cfg(all(windows, feature = "local_tty"))]
+                self.abort_auto_started_ssh_zmodem_receiver(ctx);
+                #[cfg(all(windows, feature = "local_tty"))]
                 self.finish_legacy_ssh_zmodem_upload_if_active();
                 let (file_name, path) = match &self.zmodem_transfer {
                     ZmodemTransferViewState::Transferring {
@@ -11744,6 +11766,8 @@ impl TerminalView {
             }
             ZmodemEvent::Cancelled { direction } => {
                 #[cfg(all(windows, feature = "local_tty"))]
+                self.abort_auto_started_ssh_zmodem_receiver(ctx);
+                #[cfg(all(windows, feature = "local_tty"))]
                 self.finish_legacy_ssh_zmodem_upload_if_active();
                 self.zmodem_transfer = ZmodemTransferViewState::Cancelled {
                     direction: *direction,
@@ -11754,6 +11778,8 @@ impl TerminalView {
             }
             ZmodemEvent::Failed { direction, message } => {
                 log::warn!("ZMODEM transfer failed: {message}");
+                #[cfg(all(windows, feature = "local_tty"))]
+                self.abort_auto_started_ssh_zmodem_receiver(ctx);
                 #[cfg(all(windows, feature = "local_tty"))]
                 self.finish_legacy_ssh_zmodem_upload_if_active();
                 #[cfg(all(windows, feature = "local_tty"))]
@@ -11773,6 +11799,20 @@ impl TerminalView {
 
     fn advance_zmodem_transfer_generation(&mut self) {
         self.zmodem_transfer_generation = self.zmodem_transfer_generation.wrapping_add(1);
+    }
+
+    #[cfg(all(windows, feature = "local_tty"))]
+    fn abort_auto_started_ssh_zmodem_receiver(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !std::mem::take(&mut self.auto_started_ssh_zmodem_receiver) {
+            return false;
+        }
+        log::info!("cancelling auto-started ZMODEM rz receiver in the active SSH channel");
+        ctx.emit(Event::AbortZmodemSilently);
+        self.write_user_bytes_to_pty(vec![escape_sequences::C0::ETX], ctx);
+        true
     }
 
     #[cfg(all(windows, feature = "local_tty"))]
@@ -12464,18 +12504,39 @@ impl TerminalView {
 
         self.advance_zmodem_transfer_generation();
         self.is_file_drop_target = false;
+        self.abort_auto_started_ssh_zmodem_receiver(ctx);
         self.cancel_legacy_ssh_zmodem_upload();
         let generation = self.zmodem_transfer_generation;
         self.active_ssh_zmodem_generation = Some(generation);
         self.zmodem_transfer = ZmodemTransferViewState::UploadStarting;
+        let remote_rz_token = if !abort_interactive_receiver
+            && matches!(
+                &upload_context,
+                SshZmodemUploadContext::Direct(DirectSshZmodemUploadContext {
+                    detect_remote_rz_cwd: true,
+                    ..
+                })
+            )
+        {
+            let token = Uuid::new_v4().simple().to_string();
+            log::info!(
+                "ZMODEM drag-and-drop starting a token-bound rz receiver in the active SSH channel"
+            );
+            Some(token)
+        } else {
+            None
+        };
+        let remote_rz_command = remote_rz_token
+            .as_deref()
+            .map(crate::terminal::zmodem_ssh::remote_rz_drag_command);
         if abort_interactive_receiver
             && matches!(
-            &upload_context,
-            SshZmodemUploadContext::Direct(DirectSshZmodemUploadContext {
-                detect_remote_rz_cwd: false,
-                ..
-            })
-        )
+                &upload_context,
+                SshZmodemUploadContext::Direct(DirectSshZmodemUploadContext {
+                    detect_remote_rz_cwd: false,
+                    ..
+                })
+            )
         {
             ctx.emit(Event::AbortZmodemSilently);
         }
@@ -12486,6 +12547,10 @@ impl TerminalView {
 
         #[cfg(test)]
         {
+            if let Some(command) = remote_rz_command.as_ref() {
+                self.auto_started_ssh_zmodem_receiver = true;
+                self.write_user_bytes_to_pty(command.as_bytes().to_vec(), ctx);
+            }
             ctx.notify();
         }
 
@@ -12547,7 +12612,7 @@ impl TerminalView {
                             None => "none",
                         }
                     );
-                    crate::terminal::zmodem_ssh::DirectSshZmodemUpload::new(
+                    let upload = crate::terminal::zmodem_ssh::DirectSshZmodemUpload::new(
                         upload_context.connection_info,
                         upload_context.ssh_command,
                         auth,
@@ -12555,8 +12620,13 @@ impl TerminalView {
                         upload_context.detect_remote_rz_cwd,
                         paths.clone(),
                         upload_context.wsl_distro,
-                    )
-                    .map(crate::terminal::zmodem_ssh::SshZmodemUpload::Direct)
+                    );
+                    upload
+                        .map(|upload| match remote_rz_token.as_ref() {
+                            Some(token) => upload.with_remote_rz_token(token.clone()),
+                            None => upload,
+                        })
+                        .map(crate::terminal::zmodem_ssh::SshZmodemUpload::Direct)
                 }
             };
             let upload = match upload {
@@ -12572,6 +12642,10 @@ impl TerminalView {
                     return true;
                 }
             };
+            if let Some(command) = remote_rz_command {
+                self.auto_started_ssh_zmodem_receiver = true;
+                self.write_user_bytes_to_pty(command.into_bytes(), ctx);
+            }
             let cancellation =
                 crate::terminal::zmodem_ssh::LegacySshZmodemUploadCancellation::default();
             let cancellation_for_task = cancellation.clone();
@@ -26045,6 +26119,8 @@ impl TypedActionView for TerminalView {
                 self.handle_zmodem_file_picker_error(*direction, message.clone(), ctx);
             }
             CancelZmodemTransfer(direction) => {
+                #[cfg(all(windows, feature = "local_tty"))]
+                self.abort_auto_started_ssh_zmodem_receiver(ctx);
                 #[cfg(all(windows, feature = "local_tty"))]
                 self.cancel_legacy_ssh_zmodem_upload();
                 #[cfg(all(windows, feature = "local_tty"))]

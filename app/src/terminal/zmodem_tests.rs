@@ -3,11 +3,11 @@ use tempfile::tempdir;
 use zmodem2::{Action, Event, FileInfo, Position};
 
 use super::{
-    CompletedDownloadFile, DownloadFile, DownloadSession, PendingZmodemSession, UploadSession,
-    ZMODEM_ABORT_SEQUENCE, ZMODEM_FAST_WINDOW_SIZE, ZMODEM_ZRINIT_CANFC32, ZMODEM_ZRINIT_CANOVIO,
-    ZmodemDetection, ZmodemDetector, ZmodemDetectorResult, ZmodemDirection, ZmodemEvent,
-    ZmodemSession, ZmodemTransferPaths, detect_zmodem_session, prepare_zmodem_receiver_wire_bytes,
-    prepare_zmodem_wire_bytes, sanitize_wire_file_name, unused_path,
+    detect_zmodem_session, prepare_zmodem_receiver_wire_bytes, prepare_zmodem_wire_bytes,
+    sanitize_wire_file_name, unused_path, CompletedDownloadFile, DownloadFile, DownloadSession,
+    PendingZmodemSession, UploadSession, ZmodemDetection, ZmodemDetector, ZmodemDetectorResult,
+    ZmodemDirection, ZmodemEvent, ZmodemSession, ZmodemTransferPaths, ZMODEM_ABORT_SEQUENCE,
+    ZMODEM_FAST_WINDOW_SIZE, ZMODEM_ZRINIT_CANFC32, ZMODEM_ZRINIT_CANOVIO,
 };
 
 #[test]
@@ -631,6 +631,7 @@ fn pending_upload_consumes_detected_receiver_init_before_sending_file_data() {
 #[test]
 fn download_session_receives_file_from_sender() {
     let dir = tempdir().unwrap();
+    let received_path = dir.path().join("remote.txt");
     let mut download = DownloadSession::new(dir.path().to_path_buf()).unwrap();
     let mut sender = zmodem2::Sender::new().unwrap();
     sender
@@ -643,12 +644,23 @@ fn download_session_receives_file_from_sender() {
     let mut download_input = Vec::new();
     let mut sender_input = Vec::new();
     let mut download_events = Vec::new();
+    let mut file_completed_after_persist = false;
     let mut sender_done = false;
     let payload = b"downloaded data";
 
     for _ in 0..10_000 {
         let download_done = download
             .drain_actions(&mut |bytes| sender_input.extend(bytes), &mut |event| {
+                if matches!(
+                    &event,
+                    ZmodemEvent::FileCompleted {
+                        direction: ZmodemDirection::Download,
+                        path: Some(path),
+                        ..
+                    } if path == &received_path
+                ) {
+                    file_completed_after_persist = received_path.exists();
+                }
                 download_events.push(event)
             })
             .unwrap();
@@ -694,9 +706,9 @@ fn download_session_receives_file_from_sender() {
         }
     }
 
-    let received_path = dir.path().join("remote.txt");
     assert_eq!(std::fs::read(received_path).unwrap(), payload);
     assert_eq!(zmodem_temp_paths(dir.path()).len(), 0);
+    assert!(file_completed_after_persist);
     assert!(download_events.iter().any(|event| {
         matches!(
             event,

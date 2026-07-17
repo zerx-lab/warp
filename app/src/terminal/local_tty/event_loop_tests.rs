@@ -9,10 +9,10 @@ use super::{ChannelResult, EventLoop, State, ZmodemState};
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::zmodem::{
-    MockZmodemSession, PendingZmodemSession, ZMODEM_ABORT_SEQUENCE, ZmodemDirection, ZmodemEvent,
-    ZmodemSession, ZmodemTransferPaths,
+    MockZmodemSession, PendingZmodemSession, ZmodemDirection, ZmodemEvent, ZmodemSession,
+    ZmodemTransferPaths, ZMODEM_ABORT_SEQUENCE,
 };
-use crate::terminal::{TerminalModel, local_tty, writeable_pty::Message, zmodem::ZmodemDetector};
+use crate::terminal::{local_tty, writeable_pty::Message, zmodem::ZmodemDetector, TerminalModel};
 
 #[test]
 fn zmodem_detection_is_ordinary_output_when_feature_disabled() {
@@ -47,6 +47,52 @@ fn zmodem_detection_emits_request_when_feature_enabled() {
     );
 
     assert_eq!(output, b"ready\r\n");
+    assert!(matches!(state.zmodem, ZmodemState::Pending(_)));
+    assert!(matches!(
+        events_rx.try_recv().unwrap(),
+        TerminalEvent::Zmodem(ZmodemEvent::UploadRequested)
+    ));
+}
+
+#[test]
+fn drag_started_rz_command_echo_is_hidden_before_zmodem_detection() {
+    let _flag = warp_core::features::FeatureFlag::Lrzsz.override_enabled(true);
+    let token = "0123456789abcdef0123456789abcdef";
+    let command = format!("\x15env WARP_ZMODEM_TOKEN={token} rz\r");
+    let command_echo = format!("env WARP_ZMODEM_TOKEN={token} rz");
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let listener = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+    let (tx, rx) = mio_channel::channel();
+    tx.send(Message::Input(command.into_bytes().into()))
+        .unwrap();
+    let mut loop_ = EventLoop::new(
+        Arc::new(FairMutex::new(TerminalModel::mock(None, None))),
+        listener,
+        MockPty,
+        rx,
+    );
+    let mut state = State::default();
+
+    loop_.drain_recv_channel(&mut state);
+    let split = command_echo.len() / 2;
+    let first = format!("alkaid@host:~/tmp$ {}", &command_echo[..split]);
+    let second = format!("{}\r\n**\x18B01000000000000", &command_echo[split..]);
+    let mut output = EventLoop::<MockPty>::process_pty_bytes(
+        &loop_.event_listener,
+        &mut state,
+        first.as_bytes(),
+    );
+    output.extend(EventLoop::<MockPty>::process_pty_bytes(
+        &loop_.event_listener,
+        &mut state,
+        second.as_bytes(),
+    ));
+
+    assert_eq!(output, b"alkaid@host:~/tmp$ \r\n");
+    assert!(!String::from_utf8_lossy(&output).contains("WARP_ZMODEM_TOKEN"));
+    assert!(state.zmodem_drag_command_echo.is_none());
     assert!(matches!(state.zmodem, ZmodemState::Pending(_)));
     assert!(matches!(
         events_rx.try_recv().unwrap(),

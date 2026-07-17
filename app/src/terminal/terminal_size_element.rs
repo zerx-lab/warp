@@ -74,6 +74,7 @@ impl Element for TerminalSizeElement {
             return self.child.dispatch_event(event, ctx, app);
         };
 
+        // 文件拖放必须由终端先处理，否则子元素会把 SSH 文件拖放退化为路径输入。
         if let Some(event_at_z_index) = event.at_z_index(z_index, ctx) {
             match event_at_z_index {
                 Event::DragFiles { location } => {
