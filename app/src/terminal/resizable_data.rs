@@ -15,6 +15,8 @@ pub const DEFAULT_WARP_DRIVE_INDEX_WIDTH: f32 = 300.;
 pub const DEFAULT_SETTINGS_PANEL_WIDTH: f32 = 194.;
 pub const DEFAULT_LEFT_PANEL_WIDTH: f32 = 240.;
 pub const DEFAULT_RIGHT_PANEL_WIDTH: f32 = 480.;
+pub const DEFAULT_CLI_SUBAGENT_WIDTH: f32 = 360.;
+pub const DEFAULT_CLI_SUBAGENT_HEIGHT: f32 = 320.;
 /// A naming system for the ResizableStateHandles
 pub enum ModalType {
     UniversalSearchWidth,
@@ -24,6 +26,8 @@ pub enum ModalType {
     SettingsPanelWidth,
     LeftPanelWidth,
     RightPanelWidth,
+    CliSubagentWidth,
+    CliSubagentHeight,
 }
 
 /// A grouping of state handles for the resizables that should be stored and loaded as a part
@@ -36,6 +40,8 @@ pub struct ModalSizes {
     pub settings_panel_width: ResizableStateHandle,
     pub left_panel_width: ResizableStateHandle,
     pub right_panel_width: ResizableStateHandle,
+    pub cli_subagent_width: ResizableStateHandle,
+    pub cli_subagent_height: ResizableStateHandle,
 }
 
 impl ModalSizes {
@@ -62,6 +68,12 @@ impl ModalSizes {
         let right_panel_width = window_snapshot
             .right_panel_width
             .unwrap_or(right_panel_size);
+        let cli_subagent_width = window_snapshot
+            .cli_subagent_width
+            .unwrap_or(DEFAULT_CLI_SUBAGENT_WIDTH);
+        let cli_subagent_height = window_snapshot
+            .cli_subagent_height
+            .unwrap_or(DEFAULT_CLI_SUBAGENT_HEIGHT);
 
         Self {
             universal_search_width: resizable_state_handle(universal_search_width),
@@ -71,6 +83,8 @@ impl ModalSizes {
             settings_panel_width: resizable_state_handle(settings_panel_width),
             left_panel_width: resizable_state_handle(left_panel_width),
             right_panel_width: resizable_state_handle(right_panel_width),
+            cli_subagent_width: resizable_state_handle(cli_subagent_width),
+            cli_subagent_height: resizable_state_handle(cli_subagent_height),
         }
     }
 
@@ -83,6 +97,8 @@ impl ModalSizes {
             settings_panel_width: resizable_state_handle(DEFAULT_SETTINGS_PANEL_WIDTH),
             left_panel_width: resizable_state_handle(left_default),
             right_panel_width: resizable_state_handle(right_default),
+            cli_subagent_width: resizable_state_handle(DEFAULT_CLI_SUBAGENT_WIDTH),
+            cli_subagent_height: resizable_state_handle(DEFAULT_CLI_SUBAGENT_HEIGHT),
         }
     }
 
@@ -96,6 +112,8 @@ impl ModalSizes {
             ModalType::SettingsPanelWidth => self.settings_panel_width.clone(),
             ModalType::LeftPanelWidth => self.left_panel_width.clone(),
             ModalType::RightPanelWidth => self.right_panel_width.clone(),
+            ModalType::CliSubagentWidth => self.cli_subagent_width.clone(),
+            ModalType::CliSubagentHeight => self.cli_subagent_height.clone(),
         }
     }
 }
@@ -111,6 +129,8 @@ impl Default for ModalSizes {
             settings_panel_width: resizable_state_handle(DEFAULT_SETTINGS_PANEL_WIDTH),
             left_panel_width: resizable_state_handle(DEFAULT_LEFT_PANEL_WIDTH),
             right_panel_width: resizable_state_handle(DEFAULT_RIGHT_PANEL_WIDTH),
+            cli_subagent_width: resizable_state_handle(DEFAULT_CLI_SUBAGENT_WIDTH),
+            cli_subagent_height: resizable_state_handle(DEFAULT_CLI_SUBAGENT_HEIGHT),
         }
     }
 }

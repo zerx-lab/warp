@@ -56,6 +56,8 @@ pub struct WindowSnapshot {
     pub vertical_tabs_panel_open: bool,
     pub left_panel_width: Option<f32>,
     pub right_panel_width: Option<f32>,
+    pub cli_subagent_width: Option<f32>,
+    pub cli_subagent_height: Option<f32>,
     pub agent_management_filters: Option<PersistedAgentManagementFilters>,
     /// The per-window theme override for this window, if the user set one via the
     /// theme chooser's "This window" scope. Re-applied on restore.

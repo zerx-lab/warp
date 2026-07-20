@@ -9662,6 +9662,20 @@ impl Workspace {
                 .unwrap_or(DEFAULT_RIGHT_PANEL_WIDTH)
         });
 
+        let cli_subagent_width = modal_sizes.map(|ms| {
+            ms.cli_subagent_width
+                .lock()
+                .expect("should be able to lock cli subagent resizable state handle")
+                .size()
+        });
+
+        let cli_subagent_height = modal_sizes.map(|ms| {
+            ms.cli_subagent_height
+                .lock()
+                .expect("should be able to lock cli subagent resizable state handle")
+                .size()
+        });
+
         WindowSnapshot {
             tabs,
             active_tab_index,
@@ -9676,6 +9690,8 @@ impl Workspace {
             vertical_tabs_panel_open: self.vertical_tabs_panel_open,
             left_panel_width,
             right_panel_width,
+            cli_subagent_width,
+            cli_subagent_height,
             agent_management_filters: None,
             theme_override: self.theme_override.clone(),
         }
