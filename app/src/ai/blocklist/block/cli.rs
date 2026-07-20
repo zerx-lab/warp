@@ -61,6 +61,7 @@ use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{AISettings, SelectionSettings};
 use crate::terminal::input::SET_INPUT_MODE_TERMINAL_ACTION_NAME;
 use crate::terminal::model::block::{AgentInteractionMetadata, BlockId};
+use crate::terminal::resizable_data::{ModalType, ResizableData};
 use crate::terminal::{ShellLaunchData, TerminalModel};
 use crate::view_components::DismissibleToast;
 use crate::workspace::WorkspaceAction;
@@ -837,6 +838,28 @@ impl CLISubagentView {
             _ => {}
         });
 
+        let resizable_data_handle = ResizableData::handle(ctx);
+        let resizable_width = match resizable_data_handle
+            .as_ref(ctx)
+            .get_handle(ctx.window_id(), ModalType::CliSubagentWidth)
+        {
+            Some(handle) => handle,
+            None => {
+                log::error!("Couldn't retrieve CLI subagent width resizable state handle.");
+                resizable_state_handle(MIN_RESIZABLE_WIDTH)
+            }
+        };
+        let resizable_height = match resizable_data_handle
+            .as_ref(ctx)
+            .get_handle(ctx.window_id(), ModalType::CliSubagentHeight)
+        {
+            Some(handle) => handle,
+            None => {
+                log::error!("Couldn't retrieve CLI subagent height resizable state handle.");
+                resizable_state_handle(MAX_HEIGHT)
+            }
+        };
+
         let mut view = Self {
             block_id,
             model,
@@ -867,8 +890,8 @@ impl CLISubagentView {
             hidden_response_scroll_offset: None,
             is_input_dismissed: false,
             input_dismiss_timer_handle: None,
-            resizable_width: resizable_state_handle(MIN_RESIZABLE_WIDTH),
-            resizable_height: resizable_state_handle(MAX_HEIGHT),
+            resizable_width,
+            resizable_height,
             current_working_directory,
             shell_launch_data,
             selected_text: Arc::new(RwLock::new(None)),
