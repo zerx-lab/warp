@@ -79,20 +79,21 @@ impl OpenAIAdapter {
 
 		let stream = matches!(service_type, ServiceType::ChatStream);
 
-		// -- compute reasoning_effort and eventual trimmed model_name
+		// -- compute reasoning_effort
 		// Zap fork: openai-compat providers that accept top-level `reasoning_effort`
 		// per their own docs (DeepSeek's thinking_mode, Kimi via openai compat, etc).
 		// Upstream genai gates this on `OpenAI` only; we widen to DeepSeek here.
 		// DeepSeek docs: https://api-docs.deepseek.com/zh-cn/guides/thinking_mode
+		//
+		// 不再从模型名末尾推断 reasoning_effort(`ReasoningEffort::from_model_name`):
+		// BYOP 用户自定义模型名里的 `-max`/`-plus` 等后缀是模型规格而非推理档位。
+		// 例如 `qwen3.8-max` 会被 `from_model_name` 误剥成 `qwen3.8` 并附带
+		// `reasoning_effort: xhigh`,导致上游网关返回 503 model_not_found。
+		// 因此 reasoning_effort 只来自显式设置(见 app/src/ai/agent_providers/chat_stream.rs
+		// 的 build_chat_options),模型名原样透传。
 		let (reasoning_effort, model_name): (Option<ReasoningEffort>, &str) =
 			if matches!(adapter_kind, AdapterKind::OpenAI | AdapterKind::DeepSeek) {
-				let (reasoning_effort, model_name) = options_set
-					.reasoning_effort()
-					.cloned()
-					.map(|v| (Some(v), model_name))
-					.unwrap_or_else(|| ReasoningEffort::from_model_name(model_name));
-
-				(reasoning_effort, model_name)
+				(options_set.reasoning_effort().cloned(), model_name)
 			} else {
 				(None, model_name)
 			};
@@ -503,7 +504,7 @@ struct OpenAIRequestParts {
 mod tests {
 	use super::*;
 	use crate::adapter::AdapterKind;
-	use crate::chat::{ChatMessage, ContentPart, MessageContent, ToolCall};
+	use crate::chat::{ChatMessage, ChatOptions, ContentPart, MessageContent, ToolCall};
 
 	fn test_model() -> ModelIden {
 		ModelIden::new(AdapterKind::OpenAI, "test-model")
@@ -553,6 +554,66 @@ mod tests {
 			assistant_json.get("reasoning_content").is_none(),
 			"reasoning_content should be absent when not set"
 		);
+	}
+
+	/// BYOP 自定义模型名里的 `-max` 是模型规格后缀,不是推理档位后缀。
+	/// 修复前 `ReasoningEffort::from_model_name` 会把 `qwen3.8-max` 误剥成
+	/// `qwen3.8`,导致上游网关 503 model_not_found。现在模型名应原样透传。
+	#[test]
+	fn test_model_name_with_max_suffix_is_not_trimmed() {
+		let model = ModelIden::new(AdapterKind::OpenAI, "qwen3.8-max");
+		let target = ServiceTarget {
+			endpoint: Endpoint::from_static("https://example.com/v1/"),
+			auth: AuthData::from_single("test-key"),
+			model,
+		};
+		let chat_req = ChatRequest::new(vec![ChatMessage::user("hi")]);
+		let options_set = ChatOptionsSet::default();
+
+		let web_req = OpenAIAdapter::util_to_web_request_data(
+			target,
+			ServiceType::Chat,
+			chat_req,
+			options_set,
+			None,
+		)
+		.expect("should build request");
+
+		assert_eq!(
+			web_req.payload["model"].as_str(),
+			Some("qwen3.8-max"),
+			"模型名应原样保留,不被剥掉 -max 后缀"
+		);
+		assert!(
+			web_req.payload.get("reasoning_effort").is_none(),
+			"未显式设置时不应注入 reasoning_effort"
+		);
+	}
+
+	/// 显式设置 reasoning_effort 时,模型名仍应原样保留,同时正确下发档位。
+	#[test]
+	fn test_explicit_reasoning_effort_keeps_model_name() {
+		let model = ModelIden::new(AdapterKind::OpenAI, "qwen3.8-max");
+		let target = ServiceTarget {
+			endpoint: Endpoint::from_static("https://example.com/v1/"),
+			auth: AuthData::from_single("test-key"),
+			model,
+		};
+		let chat_req = ChatRequest::new(vec![ChatMessage::user("hi")]);
+		let chat_options = ChatOptions::default().with_reasoning_effort(ReasoningEffort::High);
+		let options_set = ChatOptionsSet::default().with_chat_options(Some(&chat_options));
+
+		let web_req = OpenAIAdapter::util_to_web_request_data(
+			target,
+			ServiceType::Chat,
+			chat_req,
+			options_set,
+			None,
+		)
+		.expect("should build request");
+
+		assert_eq!(web_req.payload["model"].as_str(), Some("qwen3.8-max"));
+		assert_eq!(web_req.payload["reasoning_effort"].as_str(), Some("high"));
 	}
 }
 
