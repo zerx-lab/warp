@@ -34,6 +34,8 @@ pub enum SftpOpsError {
     Cancelled,
 }
 
+/// `Display` 保持稳定的英文形式,给 log / `anyhow` 链使用 —— 日志不随 UI 语言变化,
+/// 便于跨 locale 检索。面向用户的文案走 [`SftpOpsError::localized`]。
 impl std::fmt::Display for SftpOpsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -42,6 +44,30 @@ impl std::fmt::Display for SftpOpsError {
             SftpOpsError::LocalIo(msg) => write!(f, "Local IO error: {msg}"),
             SftpOpsError::NoCredentials(msg) => write!(f, "Credentials not found: {msg}"),
             SftpOpsError::Cancelled => write!(f, "Transfer cancelled"),
+        }
+    }
+}
+
+impl SftpOpsError {
+    /// 按当前 UI locale 渲染错误文案。toast / 连接状态等用户可见位置一律用这个,
+    /// 不要用 `to_string()`(那是英文 log 形式)。
+    ///
+    /// 内层 `msg` 由底层 `zap_sftp` 协议层拼出,仍是英文;此处本地化的是错误类别前缀。
+    pub fn localized(&self) -> String {
+        match self {
+            SftpOpsError::Connection(msg) => {
+                crate::t!("sftp-ops-error-connection", detail = msg.clone())
+            }
+            SftpOpsError::Operation(msg) => {
+                crate::t!("sftp-ops-error-operation", detail = msg.clone())
+            }
+            SftpOpsError::LocalIo(msg) => {
+                crate::t!("sftp-ops-error-local-io", detail = msg.clone())
+            }
+            SftpOpsError::NoCredentials(msg) => {
+                crate::t!("sftp-ops-error-no-credentials", detail = msg.clone())
+            }
+            SftpOpsError::Cancelled => crate::t!("sftp-ops-error-cancelled"),
         }
     }
 }
