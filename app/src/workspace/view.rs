@@ -5808,14 +5808,25 @@ impl Workspace {
                 .unwrap_or_else(|| "<unknown>".to_string());
 
             format!(
-                "Zap 日志导出\n\
-                 生成时间: {now}\n\
-                 版本: {version}\n\
-                 channel: {channel}\n\
-                 执行模式: {execution_mode:?}\n\
+                "{header}\n\
+                 {generated_at}\n\
+                 {version_line}\n\
+                 {channel_line}\n\
+                 {execution_mode_line}\n\
                  OS: {os}\n\
                  ARCH: {arch}\n\
-                 日志目录: {log_dir_str}\n",
+                 {log_dir_line}\n",
+                header = crate::t!("workspace-log-export-header"),
+                generated_at =
+                    crate::t!("workspace-log-export-generated-at", time = now.to_string()),
+                version_line = crate::t!("workspace-log-export-version", version = version),
+                channel_line =
+                    crate::t!("workspace-log-export-channel", channel = channel.to_string()),
+                execution_mode_line = crate::t!(
+                    "workspace-log-export-execution-mode",
+                    mode = format!("{execution_mode:?}")
+                ),
+                log_dir_line = crate::t!("workspace-log-export-log-dir", dir = log_dir_str),
                 os = std::env::consts::OS,
                 arch = std::env::consts::ARCH,
             )

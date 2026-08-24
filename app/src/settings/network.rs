@@ -36,7 +36,7 @@ use settings::{macros::define_settings_group, SupportedPlatforms, SyncToCloud};
     settings_value::SettingsValue,
 )]
 #[schemars(
-    description = "HTTP 代理模式: off 完全禁用(默认);system 沿用系统/环境;custom 使用显式 URL。",
+    description = "The HTTP proxy mode: off disables it entirely (the default); system follows the system/environment; custom uses an explicit URL.",
     rename_all = "snake_case"
 )]
 pub enum ProxyMode {
@@ -77,7 +77,7 @@ define_settings_group!(NetworkSettings, settings: [
         sync_to_cloud: SyncToCloud::Never,
         private: false,
         toml_path: "network.proxy_mode",
-        description: "HTTP 代理模式:off (默认) / system / custom。",
+        description: "The HTTP proxy mode: off (default) / system / custom.",
     },
     proxy_url: ProxyUrlSetting {
         type: String,
@@ -86,7 +86,7 @@ define_settings_group!(NetworkSettings, settings: [
         sync_to_cloud: SyncToCloud::Never,
         private: false,
         toml_path: "network.proxy_url",
-        description: "Custom 模式下的代理 URL,例:http://proxy.corp:8080。",
+        description: "The proxy URL used in custom mode, for example http://proxy.corp:8080.",
     },
     proxy_username: ProxyUsernameSetting {
         type: String,
@@ -95,7 +95,7 @@ define_settings_group!(NetworkSettings, settings: [
         sync_to_cloud: SyncToCloud::Never,
         private: false,
         toml_path: "network.proxy_username",
-        description: "Custom 模式下的代理用户名;为空表示无 basic auth 或无 username。",
+        description: "The proxy username used in custom mode; empty means no basic auth or no username.",
     },
     proxy_no_proxy: ProxyNoProxySetting {
         type: String,
@@ -104,6 +104,6 @@ define_settings_group!(NetworkSettings, settings: [
         sync_to_cloud: SyncToCloud::Never,
         private: false,
         toml_path: "network.proxy_no_proxy",
-        description: "逗号分隔的 host 例外列表,例:localhost,127.0.0.1,.internal。",
+        description: "A comma-separated list of host exceptions, for example localhost,127.0.0.1,.internal.",
     },
 ]);

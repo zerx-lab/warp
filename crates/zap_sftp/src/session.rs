@@ -52,9 +52,11 @@ impl SftpSession {
 
         // 通过 ToSocketAddrs 进行 DNS 解析，支持主机名和 IP 地址
         let socket_addr = addr.to_socket_addrs()
-            .map_err(|e| SftpError::ConnectionFailed(format!("地址解析失败: {e}")))?
+            .map_err(|e| SftpError::ConnectionFailed(format!("Address resolution failed: {e}")))?
             .next()
-            .ok_or_else(|| SftpError::ConnectionFailed(format!("DNS 解析无结果: {addr}")))?;
+            .ok_or_else(|| {
+                SftpError::ConnectionFailed(format!("DNS resolution returned no results: {addr}"))
+            })?;
 
         // 使用带超时的 TCP 连接
         let tcp = TcpStream::connect_timeout(&socket_addr, effective_timeout)
@@ -62,15 +64,16 @@ impl SftpSession {
                 if e.kind() == std::io::ErrorKind::TimedOut {
                     SftpError::Timeout
                 } else {
-                    SftpError::ConnectionFailed(format!("连接 {addr} 失败: {e}"))
+                    SftpError::ConnectionFailed(format!("Failed to connect to {addr}: {e}"))
                 }
             })?;
 
-        let mut session = ssh2::Session::new()
-            .map_err(|e| SftpError::ConnectionFailed(format!("创建 SSH 会话失败: {e}")))?;
+        let mut session = ssh2::Session::new().map_err(|e| {
+            SftpError::ConnectionFailed(format!("Failed to create SSH session: {e}"))
+        })?;
 
         let tcp_for_session = tcp.try_clone()
-            .map_err(|e| SftpError::ConnectionFailed(format!("克隆 TCP 流失败: {e}")))?;
+            .map_err(|e| SftpError::ConnectionFailed(format!("Failed to clone TCP stream: {e}")))?;
         session.set_tcp_stream(tcp_for_session);
 
         // 设置 SSH 会话超时（毫秒），影响 handshake 和后续所有阻塞操作
@@ -81,7 +84,7 @@ impl SftpSession {
                 if is_timeout_error(&e) {
                     SftpError::Timeout
                 } else {
-                    SftpError::ConnectionFailed(format!("SSH 握手失败: {e}"))
+                    SftpError::ConnectionFailed(format!("SSH handshake failed: {e}"))
                 }
             })?;
 
@@ -92,7 +95,7 @@ impl SftpSession {
                         if is_timeout_error(&e) {
                             SftpError::Timeout
                         } else {
-                            SftpError::AuthFailed(format!("密码认证失败: {e}"))
+                            SftpError::AuthFailed(format!("Password authentication failed: {e}"))
                         }
                     })?;
             }
@@ -103,14 +106,14 @@ impl SftpSession {
                         if is_timeout_error(&e) {
                             SftpError::Timeout
                         } else {
-                            SftpError::AuthFailed(format!("密钥认证失败: {e}"))
+                            SftpError::AuthFailed(format!("Key authentication failed: {e}"))
                         }
                     })?;
             }
         }
 
         if !session.authenticated() {
-            return Err(SftpError::AuthFailed("认证未通过".into()));
+            return Err(SftpError::AuthFailed("Authentication was not accepted".into()));
         }
 
         // 设置操作超时（30秒），避免网络异常时操作无限阻塞

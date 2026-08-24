@@ -425,31 +425,31 @@ impl PackageManager {
         let hint = match self {
             Self::Apt { package_name } => {
                 format!(
-                    "请运行: 从 GitHub Release 下载 .deb 后 `sudo apt install ./{package_name}_*.deb`,\
-                     或者把 release 添加为 apt 源后 `sudo apt update && sudo apt install {package_name}`"
+                    "Run: download the .deb from the GitHub Release, then `sudo apt install ./{package_name}_*.deb`, \
+                     or add the release as an apt source and run `sudo apt update && sudo apt install {package_name}`"
                 )
             }
             Self::Yum { package_name } => {
-                format!("请运行: 下载 .rpm 后 `sudo yum install ./{package_name}-*.rpm`")
+                format!("Run: download the .rpm, then `sudo yum install ./{package_name}-*.rpm`")
             }
             Self::Dnf { package_name } => {
-                format!("请运行: 下载 .rpm 后 `sudo dnf install ./{package_name}-*.rpm`")
+                format!("Run: download the .rpm, then `sudo dnf install ./{package_name}-*.rpm`")
             }
             Self::Zypper { package_name } => {
-                format!("请运行: 下载 .rpm 后 `sudo zypper install ./{package_name}-*.rpm`")
+                format!("Run: download the .rpm, then `sudo zypper install ./{package_name}-*.rpm`")
             }
             Self::PacmanOfficial { package_name } => {
-                format!("请运行: `sudo pacman -Syu {package_name}`")
+                format!("Run: `sudo pacman -Syu {package_name}`")
             }
             Self::PacmanAur { package_name } => {
                 format!(
-                    "您似乎从 AUR 安装了 {package_name}。请用 AUR helper 升级,\
-                     例如: `paru -Syu {package_name}` 或 `yay -Syu {package_name}`。\
-                     不要手动 pacman -U,GitHub Release 不附带 .pkg.tar.zst 资产。"
+                    "It looks like {package_name} was installed from the AUR. Upgrade with an AUR helper, \
+                     for example: `paru -Syu {package_name}` or `yay -Syu {package_name}`. \
+                     Do not run pacman -U by hand — the GitHub Release ships no .pkg.tar.zst asset."
                 )
             }
         };
-        log::info!("openWarp 升级提示: {hint}");
+        log::info!("openWarp upgrade hint: {hint}");
     }
 }
 

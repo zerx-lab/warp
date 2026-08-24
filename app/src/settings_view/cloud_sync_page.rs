@@ -33,11 +33,51 @@ use crate::ssh_manager::{SshTreeChangedEvent, SshTreeChangedNotifier};
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
 
 use warp_ssh_manager::{with_conn, DbVersionStore, SyncMetaRepository, SshSyncProvider};
-use zap_sync::{GistClient, SyncEngine, SyncPlatform, SyncResult};
+use zap_sync::{GistClient, GistClientError, SyncEngine, SyncPlatform, SyncResult, SyncEngineError};
 
 const INPUT_AREA_MAX_WIDTH: f32 = 420.0;
 const BUTTON_PADDING: f32 = 6.0;
 const DIALOG_WIDTH: f32 = 450.0;
+
+/// 把 `zap_sync` 的错误按当前 UI locale 渲染成用户可见文案。
+///
+/// `zap_sync` 是独立 crate,不依赖 app 的 i18n 层,其 `Display` 是稳定英文(给 log 用)。
+/// 本地化只能在 app crate 边界做:此处翻译错误类别前缀,内层 detail 仍是底层英文原文。
+fn localize_sync_error(error: &SyncEngineError) -> String {
+    match error {
+        SyncEngineError::Crypto(detail) => {
+            crate::t!("cloud-sync-error-crypto", detail = detail.clone())
+        }
+        SyncEngineError::Gist(detail) => {
+            crate::t!("cloud-sync-error-gist", detail = detail.clone())
+        }
+        SyncEngineError::Provider(detail) => {
+            crate::t!("cloud-sync-error-provider", detail = detail.clone())
+        }
+        SyncEngineError::Serialization(detail) => {
+            crate::t!("cloud-sync-error-serialization", detail = detail.clone())
+        }
+        SyncEngineError::VersionStore(detail) => {
+            crate::t!("cloud-sync-error-version-store", detail = detail.clone())
+        }
+    }
+}
+
+/// 同 [`localize_sync_error`],但针对 Gist 客户端错误(token 校验路径直接展示给用户)。
+fn localize_gist_error(error: &GistClientError) -> String {
+    match error {
+        GistClientError::Request(inner) => {
+            crate::t!("cloud-sync-gist-error-request", detail = inner.to_string())
+        }
+        GistClientError::NotFound => crate::t!("cloud-sync-gist-error-not-found"),
+        GistClientError::NoToken => crate::t!("cloud-sync-gist-error-no-token"),
+        GistClientError::Api { status, body } => crate::t!(
+            "cloud-sync-gist-error-api",
+            status = status.to_string(),
+            body = body.clone()
+        ),
+    }
+}
 
 /// 同步方向
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,7 +377,7 @@ impl CloudSyncPageView {
                             engine
                                 .download(sync_platform, &spawn_token, &[&provider], &version_store)
                                 .await
-                                .map_err(|e| e.to_string())
+                                .map_err(|e| localize_sync_error(&e))
                         },
                         move |view, result, ctx| {
                             match &result {
@@ -636,7 +676,7 @@ impl CloudSyncPageView {
                 engine
                     .upload(platform, &spawn_token, &[&provider], &version_store)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| localize_sync_error(&e))
             },
             move |view, result, ctx| {
                 view.handle_action(
@@ -677,7 +717,7 @@ impl CloudSyncPageView {
                 engine
                     .download(platform, &token, &[&provider], &version_store)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| localize_sync_error(&e))
             },
             move |view, result, ctx| {
                 view.handle_action(
@@ -717,7 +757,7 @@ impl CloudSyncPageView {
                 engine
                     .force_upload(platform, &token, &[&provider], &version_store)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| localize_sync_error(&e))
             },
             move |view, result, ctx| {
                 view.handle_action(
@@ -787,7 +827,7 @@ impl CloudSyncPageView {
                 engine
                     .upload(platform, &spawn_token, &[&provider], &version_store)
                     .await
-                    .map_err(|e| e.to_string())
+                    .map_err(|e| localize_sync_error(&e))
             },
             move |view, result, ctx| {
                 // 上传完成后设置最终状态（成功/冲突/失败由 SyncComplete 统一处理）
@@ -842,7 +882,7 @@ impl TypedActionView for CloudSyncPageView {
                         client
                             .validate_token(platform, &token)
                             .await
-                            .map_err(|e| e.to_string())
+                            .map_err(|e| localize_gist_error(&e))
                     },
                     move |view, result, ctx| {
                         view.handle_action(

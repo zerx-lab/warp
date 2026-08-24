@@ -238,13 +238,13 @@ impl SftpBackend for InMemorySftpBackend {
         let local = self.to_local(path);
         let p = path.display();
         let entries = fs::read_dir(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("列出目录失败 {p}: {e}"))
+            SftpOpsError::Operation(format!("Failed to list directory {p}: {e}"))
         })?;
 
         let mut result = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|e| {
-                SftpOpsError::Operation(format!("读取目录条目失败: {e}"))
+                SftpOpsError::Operation(format!("Failed to read directory entry: {e}"))
             })?;
             let name = entry.file_name().to_string_lossy().to_string();
             // 过滤 . 和 ..
@@ -252,7 +252,7 @@ impl SftpBackend for InMemorySftpBackend {
                 continue;
             }
             let meta = fs::symlink_metadata(entry.path()).map_err(|e| {
-                SftpOpsError::Operation(format!("读取元数据失败: {e}"))
+                SftpOpsError::Operation(format!("Failed to read metadata: {e}"))
             })?;
             result.push(self.metadata_to_entry(name, &entry.path(), &meta));
         }
@@ -264,7 +264,7 @@ impl SftpBackend for InMemorySftpBackend {
         let local = self.to_local(path);
         let p = path.display();
         fs::remove_file(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("删除文件失败 {p}: {e}"))
+            SftpOpsError::Operation(format!("Failed to delete file {p}: {e}"))
         })
     }
 
@@ -272,7 +272,7 @@ impl SftpBackend for InMemorySftpBackend {
         let local = self.to_local(path);
         let p = path.display();
         fs::remove_dir_all(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("递归删除目录失败 {p}: {e}"))
+            SftpOpsError::Operation(format!("Failed to recursively delete directory {p}: {e}"))
         })
     }
 
@@ -280,7 +280,7 @@ impl SftpBackend for InMemorySftpBackend {
         let local = self.to_local(path);
         let p = path.display();
         fs::create_dir(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("创建目录失败 {p}: {e}"))
+            SftpOpsError::Operation(format!("Failed to create directory {p}: {e}"))
         })
     }
 
@@ -289,7 +289,7 @@ impl SftpBackend for InMemorySftpBackend {
         let new_local = self.to_local(new_path);
         fs::rename(&old_local, &new_local).map_err(|e| {
             SftpOpsError::Operation(format!(
-                "重命名失败 {} -> {}: {e}",
+                "Rename failed {} -> {}: {e}",
                 old_path.display(),
                 new_path.display()
             ))
@@ -300,7 +300,7 @@ impl SftpBackend for InMemorySftpBackend {
         let local = self.to_local(path);
         let p = path.display();
         let canonical = dunce::canonicalize(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("解析路径失败 {p}: {e}"))
+            SftpOpsError::Operation(format!("Failed to resolve path {p}: {e}"))
         })?;
         Ok(self.to_remote(&canonical))
     }
@@ -309,7 +309,7 @@ impl SftpBackend for InMemorySftpBackend {
         let local = self.to_local(path);
         let p = path.display();
         let meta = fs::symlink_metadata(&local).map_err(|e| {
-            SftpOpsError::Operation(format!("获取文件信息失败 {p}: {e}"))
+            SftpOpsError::Operation(format!("Failed to get file info for {p}: {e}"))
         })?;
         let name = path
             .file_name()
@@ -329,11 +329,11 @@ impl SftpBackend for InMemorySftpBackend {
         // 确保父目录存在
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                SftpOpsError::LocalIo(format!("创建目录失败: {e}"))
+                SftpOpsError::LocalIo(format!("Failed to create directory: {e}"))
             })?;
         }
         fs::copy(local_path, &dest).map_err(|e| {
-            SftpOpsError::LocalIo(format!("上传文件失败: {e}"))
+            SftpOpsError::LocalIo(format!("Failed to upload file: {e}"))
         })?;
         Ok(())
     }
@@ -349,14 +349,14 @@ impl SftpBackend for InMemorySftpBackend {
         // 确保本地父目录存在
         if let Some(parent) = local_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                SftpOpsError::LocalIo(format!("创建目录失败: {e}"))
+                SftpOpsError::LocalIo(format!("Failed to create directory: {e}"))
             })?;
         }
         let mut src_file = fs::File::open(&src).map_err(|e| {
-            SftpOpsError::LocalIo(format!("打开远程文件失败: {e}"))
+            SftpOpsError::LocalIo(format!("Failed to open remote file: {e}"))
         })?;
         let mut dest_file = fs::File::create(local_path).map_err(|e| {
-            SftpOpsError::LocalIo(format!("创建本地文件失败: {e}"))
+            SftpOpsError::LocalIo(format!("Failed to create local file: {e}"))
         })?;
 
         // 分块复制以模拟流式传输
@@ -364,17 +364,17 @@ impl SftpBackend for InMemorySftpBackend {
         let mut buf = vec![0u8; CHUNK_SIZE];
         loop {
             let n = src_file.read(&mut buf).map_err(|e| {
-                SftpOpsError::LocalIo(format!("读取失败: {e}"))
+                SftpOpsError::LocalIo(format!("Read failed: {e}"))
             })?;
             if n == 0 {
                 break;
             }
             dest_file.write_all(&buf[..n]).map_err(|e| {
-                SftpOpsError::LocalIo(format!("写入失败: {e}"))
+                SftpOpsError::LocalIo(format!("Write failed: {e}"))
             })?;
         }
         dest_file.flush().map_err(|e| {
-            SftpOpsError::LocalIo(format!("刷新失败: {e}"))
+            SftpOpsError::LocalIo(format!("Flush failed: {e}"))
         })?;
         Ok(())
     }

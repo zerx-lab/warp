@@ -264,7 +264,7 @@ impl SyncDataProvider for SshSyncProvider {
                     // 与 read_secret 同等严格:keychain 任何错误都中止,避免无法 rollback
                     rollback_keychain_writes(&self.secret_store, &written_secrets);
                     return Err(SyncEngineError::Provider(format!(
-                        "读取 keychain 旧值失败 ({}, {:?}): {e}。已回滚 {} 项,请确认密钥库可用后重试下载",
+                        "Failed to read the previous keychain value ({}, {:?}): {e}. Rolled back {} entries; confirm the keystore is available and retry the download.",
                         s.node_id,
                         s.kind,
                         written_secrets.len()
@@ -274,7 +274,7 @@ impl SyncDataProvider for SshSyncProvider {
             if let Err(e) = self.secret_store.set(&s.node_id, s.kind, &s.value) {
                 rollback_keychain_writes(&self.secret_store, &written_secrets);
                 return Err(SyncEngineError::Provider(format!(
-                    "写入 keychain 失败 ({}, {:?}): {e},请检查密钥库权限后重试下载",
+                    "Failed to write to the keychain ({}, {:?}): {e}. Check the keystore permissions and retry the download.",
                     s.node_id, s.kind
                 )));
             }
@@ -308,7 +308,7 @@ impl SyncDataProvider for SshSyncProvider {
 
                 for node in &sorted_nodes {
                     let kind = NodeKind::parse(&node.kind)
-                        .ok_or_else(|| anyhow::anyhow!("无效的 kind: {}", node.kind))?;
+                        .ok_or_else(|| anyhow::anyhow!("Invalid kind: {}", node.kind))?;
                     diesel::insert_into(persistence::schema::ssh_nodes::table)
                         .values(persistence::model::NewSshNode {
                             id: &node.id,
@@ -346,7 +346,7 @@ impl SyncDataProvider for SshSyncProvider {
             let rolled = written_secrets.len();
             rollback_keychain_writes(&self.secret_store, &written_secrets);
             return Err(SyncEngineError::Provider(format!(
-                "DB 写入失败 ({e});已回滚 {rolled} 项 keychain 写入"
+                "Database write failed ({e}); rolled back {rolled} keychain writes"
             )));
         }
 
@@ -434,10 +434,10 @@ fn read_secret(
     match store.get(node_id, kind) {
         Ok(opt) => Ok(opt.map(|z| z.to_string())),
         Err(e) => Err(SyncEngineError::Provider(format!(
-            "读取 keychain 失败 ({node_id}, {kind:?}): {e}。\
-             keychain 可能被锁定或当前环境无 backend(headless Linux / WSL 等)。\
-             请解锁 keychain 或启用 secret-service / Credential Manager 后重试上传。\
-             若该服务器确实不需要密码同步,可在 SSH 管理器中清除该字段。"
+            "Failed to read the keychain ({node_id}, {kind:?}): {e}. \
+             The keychain may be locked, or this environment may have no backend (headless Linux / WSL, etc.). \
+             Unlock the keychain or enable secret-service / Credential Manager, then retry the upload. \
+             If this server genuinely does not need password sync, clear that field in the SSH manager."
         ))),
     }
 }

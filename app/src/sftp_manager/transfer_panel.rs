@@ -48,14 +48,14 @@ fn render_state_label(state: &TransferState, appearance: &Appearance) -> Box<dyn
 
     let (label, color) = match state {
         TransferState::Pending => (
-            String::from("等待中"),
+            crate::t!("sftp-transfer-status-waiting"),
             theme.sub_text_color(theme.background()),
         ),
-        TransferState::InProgress => (String::from("传输中"), theme.accent()),
-        TransferState::Completed => (String::from("已完成"), theme.ui_green_color().into()),
-        TransferState::Failed(_) => (String::from("失败"), theme.ui_error_color().into()),
+        TransferState::InProgress => (crate::t!("sftp-transfer-status-active"), theme.accent()),
+        TransferState::Completed => (crate::t!("sftp-transfer-status-done"), theme.ui_green_color().into()),
+        TransferState::Failed(_) => (crate::t!("sftp-transfer-status-failed"), theme.ui_error_color().into()),
         TransferState::Cancelled => (
-            String::from("已取消"),
+            crate::t!("sftp-transfer-status-cancelled"),
             theme.sub_text_color(theme.background()),
         ),
     };
@@ -204,7 +204,7 @@ pub fn render_transfer_panel(
 
     // 标题栏
     let count = transfers.len();
-    let title_text = format!("传输 ({count})");
+    let title_text = crate::t!("sftp-transfer-panel-title", count = count);
 
     let title_el = Text::new_inline(title_text, ui_font, ui_font_size)
         .with_color(text_color.into())

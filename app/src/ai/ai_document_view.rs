@@ -607,7 +607,7 @@ impl AIDocumentView {
                 let theme = appearance.theme();
                 let color = theme.nonactive_ui_detail().into_solid();
                 let ui_builder = appearance.ui_builder().clone();
-                let tooltip_text = "计划已自动保存到本地。".to_string();
+                let tooltip_text = crate::t!("ai-plan-saved-locally-tooltip");
                 let synced_status_mouse_state = self.synced_status_mouse_state.clone();
                 Container::new(
                     ConstrainedBox::new(

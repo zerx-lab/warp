@@ -157,18 +157,18 @@ async fn test_password_auth_unix(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("启动 ssh 失败: {e}"))?;
+        .map_err(|e| format!("Failed to start ssh: {e}"))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(&stdin_bytes)
             .await
-            .map_err(|e| format!("写入密码失败: {e}"))?;
+            .map_err(|e| format!("Failed to write password: {e}"))?;
     }
 
     let output = match tokio::time::timeout(TEST_TIMEOUT, child.output()).await {
         Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(format!("读取 ssh 输出失败: {e}")),
+        Ok(Err(e)) => return Err(format!("Failed to read ssh output: {e}")),
         Err(_) => return Err("Connection timeout".into()),
     };
 
@@ -181,7 +181,7 @@ async fn test_password_auth_windows(
     cmd_args: Vec<String>,
     password: &Zeroizing<String>,
 ) -> Result<(), String> {
-    let askpass = AskpassSession::new(password).map_err(|e| format!("准备 askpass 失败: {e}"))?;
+    let askpass = AskpassSession::new(password).map_err(|e| format!("Failed to prepare askpass: {e}"))?;
 
     let mut cmd = command::r#async::Command::new("ssh");
     cmd.args(&cmd_args)
@@ -192,13 +192,13 @@ async fn test_password_auth_windows(
         .kill_on_drop(true);
     askpass.apply_env(&mut cmd);
 
-    let child = cmd.spawn().map_err(|e| format!("启动 ssh 失败: {e}"))?;
+    let child = cmd.spawn().map_err(|e| format!("Failed to start ssh: {e}"))?;
 
     // timeout 命中时 child 被 drop → kill_on_drop 自动 kill ssh。
     // askpass 守卫在函数尾部 drop,清理临时文件。
     let output = match tokio::time::timeout(TEST_TIMEOUT, child.output()).await {
         Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(format!("读取 ssh 输出失败: {e}")),
+        Ok(Err(e)) => return Err(format!("Failed to read ssh output: {e}")),
         Err(_) => return Err("Connection timeout".into()),
     };
     drop(askpass);

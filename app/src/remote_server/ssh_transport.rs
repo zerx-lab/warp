@@ -361,16 +361,16 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
     .await
     .map_err(|_| {
         anyhow!(
-            "dev remote-server 交叉编译超时(>{:?})",
+            "dev remote-server cross-compilation timed out (>{:?})",
             remote_server::setup::DEV_CROSS_COMPILE_TIMEOUT
         )
     })?
-    .map_err(|e| anyhow!("无法启动 cargo 构建: {e}"))?;
+    .map_err(|e| anyhow!("Could not start the cargo build: {e}"))?;
 
     if !status.success() {
         let code = status.code().unwrap_or(-1);
         return Err(anyhow!(
-            "cargo 交叉编译失败(exit {code}),详见运行 Zap 的终端的 cargo 输出"
+            "cargo cross-compilation failed (exit {code}); see the cargo output in the terminal running Zap"
         ));
     }
 
@@ -386,7 +386,7 @@ async fn cross_compile_remote_server(backend: &DevBuildBackend) -> Result<PathBu
         .join(bin_name);
     if !binary.is_file() {
         return Err(anyhow!(
-            "交叉编译完成但未在 {} 找到产物(若设置了 CARGO_TARGET_DIR 请确认路径)",
+            "Cross-compilation finished but no artifact was found at {} (if CARGO_TARGET_DIR is set, verify the path)",
             binary.display()
         ));
     }
@@ -401,7 +401,7 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     // 前置条件检查:缺任意一项都返回错误,由调用方回退到下载安装。
     if !musl_target_installed().await {
         return Err(anyhow!(
-            "未安装 rust target {};可执行 `rustup target add {}`",
+            "The rust target {} is not installed; run `rustup target add {}`",
             remote_server::setup::DEV_MUSL_TARGET,
             remote_server::setup::DEV_MUSL_TARGET,
         ));
@@ -410,9 +410,9 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     // 能编译 freetype-sys 等 C++ 依赖),否则回退到 musl-gcc。两者皆无则报错。
     let backend = select_dev_build_backend().ok_or_else(|| {
         anyhow!(
-            "未找到可用的 musl 交叉编译后端。建议安装 cargo-zigbuild + zig\
-             (`cargo install cargo-zigbuild`,并用包管理器安装 `zig`),\
-             或安装完整的 musl C/C++ 交叉工具链({})",
+            "No usable musl cross-compilation backend was found. Install cargo-zigbuild + zig \
+             (`cargo install cargo-zigbuild`, plus `zig` from your package manager), \
+             or install a complete musl C/C++ cross toolchain ({})",
             DEV_MUSL_LINKER_CANDIDATES.join(" / ")
         )
     })?;
@@ -432,7 +432,7 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
         let code = mkdir_output.status.code().unwrap_or(-1);
         let stderr = String::from_utf8_lossy(&mkdir_output.stderr);
         return Err(anyhow!(
-            "远端 remote-server 目录创建失败(exit {code}): {stderr}"
+            "Failed to create the remote remote-server directory (exit {code}): {stderr}"
         ));
     }
 
@@ -457,7 +457,7 @@ async fn dev_install_local_binary(socket_path: &Path) -> Result<()> {
     if !chmod_output.status.success() {
         let code = chmod_output.status.code().unwrap_or(-1);
         let stderr = String::from_utf8_lossy(&chmod_output.stderr);
-        return Err(anyhow!("远端 chmod 失败(exit {code}): {stderr}"));
+        return Err(anyhow!("Remote chmod failed (exit {code}): {stderr}"));
     }
 
     // 复用既有校验逻辑确认上传的二进制可运行。

@@ -70,7 +70,7 @@ pub(crate) fn verify_oss_asset_sha256(
     use std::io::Read as _;
     let mut hasher = Sha256::new();
     let mut file = std::fs::File::open(path)
-        .with_context(|| format!("打开下载文件失败: {}", path.display()))?;
+        .with_context(|| format!("Failed to open the downloaded file: {}", path.display()))?;
     let mut buf = [0u8; 64 * 1024];
     loop {
         let n = file.read(&mut buf)?;
@@ -85,7 +85,7 @@ pub(crate) fn verify_oss_asset_sha256(
         Ok(())
     } else {
         Err(anyhow!(
-            "SHA-256 校验失败: expected={expected} actual={actual} (asset={asset_name}, path={})",
+            "SHA-256 verification failed: expected={expected} actual={actual} (asset={asset_name}, path={})",
             path.display()
         ))
     }

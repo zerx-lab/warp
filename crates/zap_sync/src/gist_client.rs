@@ -21,13 +21,13 @@ const FIND_GIST_MAX_PAGES: u32 = 20;
 /// Gist API 客户端错误
 #[derive(Debug, Error)]
 pub enum GistClientError {
-    #[error("网络请求失败: {0}")]
+    #[error("Network request failed: {0}")]
     Request(#[from] reqwest::Error),
-    #[error("Gist 未找到")]
+    #[error("Gist not found")]
     NotFound,
-    #[error("Token 未配置")]
+    #[error("Token is not configured")]
     NoToken,
-    #[error("API 错误: {status} {body}")]
+    #[error("API error: {status} {body}")]
     Api { status: u16, body: String },
 }
 
@@ -105,7 +105,7 @@ impl GistClient {
         // /user(可能是 SSO 拦截页 / 代理伪造 200),不能误判为验证通过
         let login = user["login"].as_str().ok_or_else(|| GistClientError::Api {
             status: 200,
-            body: "响应缺少 login 字段,Token 未真正通过验证".to_string(),
+            body: "The response is missing the login field; the token was not actually validated".to_string(),
         })?;
         Ok(login.to_string())
     }

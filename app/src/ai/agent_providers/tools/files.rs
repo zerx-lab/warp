@@ -34,18 +34,18 @@ fn parameters() -> Value {
         "properties": {
             "files": {
                 "type": "array",
-                "description": "要读取的文件列表。",
+                "description": "The list of files to read.",
                 "items": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "文件路径(相对当前工作目录或绝对路径均可)。"
+                            "description": "The file path (either relative to the current working directory or absolute)."
                         },
                         "line_ranges": {
                             "type": "array",
-                            "description": "可选的行号区间列表(1-based,闭区间)。\
-                                            为空时读取整个文件。",
+                            "description": "An optional list of line ranges (1-based, inclusive).\
+                                            Reads the whole file when empty.",
                             "items": {
                                 "type": "object",
                                 "properties": {

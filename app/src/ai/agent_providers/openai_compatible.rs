@@ -28,22 +28,22 @@ struct ModelsResponse {
 /// fetch 期间可能出现的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum OpenAiCompatibleError {
-    #[error("base URL 无效: {0}")]
+    #[error("Invalid base URL: {0}")]
     InvalidBaseUrl(String),
 
-    #[error("HTTP 错误: {0}")]
+    #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 
-    #[error("HTTP 状态码 {status}: {body}")]
+    #[error("HTTP status {status}: {body}")]
     Status { status: u16, body: String },
 
-    #[error("响应解析失败: {0}")]
+    #[error("Failed to parse response: {0}")]
     Decode(String),
 
-    #[error("网络/流式请求失败: {0}")]
+    #[error("Network/streaming request failed: {0}")]
     Stream(String),
 
-    #[error("调用失败: {0}")]
+    #[error("Call failed: {0}")]
     Other(String),
 }
 
@@ -53,12 +53,12 @@ pub(crate) fn normalize_base_url(input: &str) -> Result<String, OpenAiCompatible
     let trimmed = input.trim().trim_end_matches('/');
     if trimmed.is_empty() {
         return Err(OpenAiCompatibleError::InvalidBaseUrl(
-            "base URL 不能为空".to_string(),
+            "The base URL cannot be empty".to_string(),
         ));
     }
     if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
         return Err(OpenAiCompatibleError::InvalidBaseUrl(format!(
-            "base URL 必须以 http:// 或 https:// 开头: {trimmed}"
+            "The base URL must start with http:// or https://: {trimmed}"
         )));
     }
     Ok(trimmed.to_string())
