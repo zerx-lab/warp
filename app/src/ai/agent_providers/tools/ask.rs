@@ -42,34 +42,34 @@ fn parameters() -> Value {
         "properties": {
             "questions": {
                 "type": "array",
-                "description": "要向用户提的问题列表(通常 1 个就够,确实有多维需澄清才发多个)。",
+                "description": "The list of questions to ask the user (usually 1 is enough; only send several when there are genuinely multiple dimensions to clarify).",
                 "items": {
                     "type": "object",
                     "properties": {
                         "question": {
                             "type": "string",
-                            "description": "问题文本(中文,简短具体)。"
+                            "description": "The question text (short and specific, in the same language as the user)."
                         },
                         "options": {
                             "type": "array",
                             "items": {"type": "string"},
                             "minItems": 2,
                             "maxItems": 4,
-                            "description": "可选项标签列表,2-4 个,具体描述每条选项后果。"
+                            "description": "The list of option labels, 2-4 of them, each concretely describing that option's consequences."
                         },
                         "recommended_index": {
                             "type": "integer",
-                            "description": "0-based 推荐选项的下标。",
+                            "description": "The 0-based index of the recommended option.",
                             "default": 0
                         },
                         "multi_select": {
                             "type": "boolean",
-                            "description": "是否允许用户多选。",
+                            "description": "Whether the user may select multiple options.",
                             "default": false
                         },
                         "supports_other": {
                             "type": "boolean",
-                            "description": "是否允许用户输入 \"其他\" 自由文本。",
+                            "description": "Whether the user may enter free-form \"other\" text.",
                             "default": false
                         }
                     },

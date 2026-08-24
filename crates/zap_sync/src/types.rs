@@ -74,15 +74,15 @@ pub struct SyncData {
 /// 同步引擎错误
 #[derive(Debug, Error)]
 pub enum SyncEngineError {
-    #[error("加密错误: {0}")]
+    #[error("Encryption error: {0}")]
     Crypto(String),
-    #[error("Gist 错误: {0}")]
+    #[error("Gist error: {0}")]
     Gist(String),
-    #[error("数据提供者错误: {0}")]
+    #[error("Data provider error: {0}")]
     Provider(String),
-    #[error("序列化错误: {0}")]
+    #[error("Serialization error: {0}")]
     Serialization(String),
-    #[error("版本存储错误: {0}")]
+    #[error("Version store error: {0}")]
     VersionStore(String),
 }
 
@@ -179,18 +179,18 @@ mod tests {
     #[test]
     fn test_sync_engine_error_display() {
         let err = SyncEngineError::Crypto("bad key".to_string());
-        assert_eq!(format!("{err}"), "加密错误: bad key");
+        assert_eq!(format!("{err}"), "Encryption error: bad key");
 
         let err = SyncEngineError::Gist("not found".to_string());
-        assert_eq!(format!("{err}"), "Gist 错误: not found");
+        assert_eq!(format!("{err}"), "Gist error: not found");
 
         let err = SyncEngineError::Provider("db fail".to_string());
-        assert_eq!(format!("{err}"), "数据提供者错误: db fail");
+        assert_eq!(format!("{err}"), "Data provider error: db fail");
 
         let err = SyncEngineError::Serialization("parse err".to_string());
-        assert_eq!(format!("{err}"), "序列化错误: parse err");
+        assert_eq!(format!("{err}"), "Serialization error: parse err");
 
         let err = SyncEngineError::VersionStore("io err".to_string());
-        assert_eq!(format!("{err}"), "版本存储错误: io err");
+        assert_eq!(format!("{err}"), "Version store error: io err");
     }
 }

@@ -124,8 +124,8 @@ fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
 /// 选不动,提示用户去设置中配。
 fn placeholder_llm_info() -> LLMInfo {
     LLMInfo {
-        display_name: "未配置自定义提供商 — 请到 设置 → AI 添加".to_owned(),
-        base_model_name: "未配置".to_owned(),
+        display_name: crate::t!("byop-placeholder-no-provider"),
+        base_model_name: crate::t!("byop-placeholder-not-configured"),
         id: ai::LLMId::from("byop-placeholder"),
         reasoning_level: None,
         usage_metadata: LLMUsageMetadata {

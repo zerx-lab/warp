@@ -10,41 +10,41 @@ use thiserror::Error;
 /// SFTP 协议级错误
 #[derive(Debug, Error)]
 pub enum SftpError {
-    #[error("IO 错误: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("SSH2 错误: {0}")]
+    #[error("SSH2 error: {0}")]
     Ssh2(#[from] ssh2::Error),
 
-    #[error("连接失败: {0}")]
+    #[error("Connection failed: {0}")]
     ConnectionFailed(String),
 
-    #[error("认证失败: {0}")]
+    #[error("Authentication failed: {0}")]
     AuthFailed(String),
 
-    #[error("操作超时")]
+    #[error("Operation timed out")]
     Timeout,
 
-    #[error("文件未找到: {0}")]
+    #[error("File not found: {0}")]
     NoSuchFile(String),
 
-    #[error("权限不足: {0}")]
+    #[error("Permission denied: {0}")]
     PermissionDenied(String),
 
-    #[error("操作失败: {0}")]
+    #[error("Operation failed: {0}")]
     General(String),
 }
 
 /// SFTP 通道错误
 #[derive(Debug, Error)]
 pub enum SftpChannelError {
-    #[error("SFTP 错误: {0}")]
+    #[error("SFTP error: {0}")]
     Sftp(#[from] SftpError),
 
-    #[error("发送请求失败: {0}")]
+    #[error("Failed to send request: {0}")]
     SendFailed(String),
 
-    #[error("接收响应失败: {0}")]
+    #[error("Failed to receive response: {0}")]
     RecvFailed(String),
 }
 

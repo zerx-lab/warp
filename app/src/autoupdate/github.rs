@@ -89,12 +89,12 @@ pub async fn fetch_latest_release(client: &http_client::Client) -> Result<Github
         .timeout(FETCH_TIMEOUT)
         .send()
         .await
-        .context("调用 GitHub Releases API 失败")?
+        .context("Failed to call the GitHub Releases API")?
         .error_for_status()
-        .context("GitHub Releases API 返回非 2xx 状态码")?
+        .context("The GitHub Releases API returned a non-2xx status code")?
         .json()
         .await
-        .context("解析 GitHub Releases JSON 失败")?;
+        .context("Failed to parse the GitHub Releases JSON")?;
     log::info!(
         "GitHub latest release: tag={} assets={}",
         release.tag_name,

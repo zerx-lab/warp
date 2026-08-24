@@ -46,23 +46,23 @@ struct MenuItem {
 fn build_file_menu_items(entry_index: usize) -> Vec<MenuItem> {
     vec![
         MenuItem {
-            label: String::from("打开"),
+            label: crate::t!("sftp-menu-open"),
             action: SftpBrowserAction::OpenEntry(entry_index),
         },
         MenuItem {
-            label: String::from("下载"),
+            label: crate::t!("sftp-menu-download"),
             action: SftpBrowserAction::DownloadEntry(entry_index),
         },
         MenuItem {
-            label: String::from("重命名"),
+            label: crate::t!("common-rename"),
             action: SftpBrowserAction::RenameEntry(entry_index),
         },
         MenuItem {
-            label: String::from("删除"),
+            label: crate::t!("common-delete"),
             action: SftpBrowserAction::DeleteEntry(entry_index),
         },
         MenuItem {
-            label: String::from("详细信息"),
+            label: crate::t!("sftp-menu-details"),
             action: SftpBrowserAction::DetailsEntry(entry_index),
         },
     ]
@@ -237,10 +237,13 @@ mod tests {
     /// 测试菜单项标签正确
     #[test]
     fn test_build_file_menu_items_labels() {
+        // 断言英文 locale 下的实际文案,避免与 `build_file_menu_items` 用同一个 `t!`
+        // key 自我比较(那样无论翻译对不对都会通过)。
+        crate::i18n::init(Some("en"));
         let items = build_file_menu_items(0);
-        let expected_labels = ["打开", "下载", "重命名", "删除", "详细信息"];
+        let expected_labels = ["Open", "Download", "Rename", "Delete", "Details"];
         for (item, expected) in items.iter().zip(expected_labels.iter()) {
-            assert_eq!(&item.label.as_str(), expected, "标签应为 {}", expected);
+            assert_eq!(&item.label.as_str(), expected, "标签应为 {expected}");
         }
     }
 

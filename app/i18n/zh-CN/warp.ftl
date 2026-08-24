@@ -3568,3 +3568,76 @@ workflow-enum-variants = 变体
 quit-warning-dont-save = 不保存
 quit-warning-show-running-processes = 显示运行中的进程
 quit-warning-save-changes-title = 保存更改？
+
+# --- ANCHOR-SUB-SFTP-MANAGER (i18n-cjk-sweep) ---
+# SFTP 文件管理器:browser / dialogs / context_menu / transfer_panel / file_list。
+# 命名前缀:sftp-*
+sftp-pane-title = 文件管理
+sftp-dialog-current-name = 当前名称: { $name }
+sftp-dialog-delete-title = 确认删除
+sftp-dialog-delete-one = 确定要删除 "{ $name }" 吗？此操作不可撤销。
+sftp-dialog-delete-many = 确定要删除 { $count } 个项目吗？此操作不可撤销。
+sftp-dialog-create-folder-title = 新建文件夹
+sftp-dialog-create = 创建
+sftp-dialog-details-title = 文件详情
+sftp-dialog-details-type = 类型
+sftp-dialog-details-size = 大小
+sftp-dialog-details-modified = 修改时间
+sftp-dialog-details-permissions = 权限
+sftp-dialog-details-path = 路径
+sftp-dialog-move-title = 移动文件
+sftp-dialog-move-confirm = 移动
+sftp-dialog-move-description = 将 "{ $source }" 移动到 { $target }
+sftp-dialog-overwrite-title = 确认覆盖
+sftp-dialog-overwrite-confirm = 覆盖
+sftp-dialog-overwrite-upload = 远程文件 { $name } 已存在，是否覆盖？
+sftp-dialog-overwrite-download = 目标文件 { $name } 已存在，是否覆盖？
+sftp-dialog-close-transfer-title = 关闭传输面板
+sftp-dialog-close-transfer-body = 有正在进行的传输任务，关闭将中断所有传输并清空记录。确定要关闭吗？
+sftp-file-type-file = 文件
+sftp-file-type-directory = 目录
+sftp-file-type-symlink = 符号链接
+sftp-file-type-other = 其他
+sftp-menu-open = 打开
+sftp-menu-download = 下载
+sftp-menu-details = 详细信息
+sftp-column-name = 名称
+sftp-column-size = 大小
+sftp-column-modified = 修改时间
+sftp-transfer-status-waiting = 等待中
+sftp-transfer-status-active = 传输中
+sftp-transfer-status-done = 已完成
+sftp-transfer-status-failed = 失败
+sftp-transfer-status-cancelled = 已取消
+sftp-transfer-panel-title = 传输 ({ $count })
+sftp-transfer-panel-close-tooltip = 关闭传输面板
+sftp-drop-to-upload = 拖放文件以上传
+sftp-error-channel-failed = 创建 SFTP 通道失败: { $error }
+sftp-error-connection-cancelled = 连接已取消
+sftp-error-server-config-missing = 未找到服务器配置
+sftp-error-server-config-read = 读取服务器配置失败: { $error }
+sftp-error-not-connected = 未连接到服务器
+sftp-error-list-dir = 列出目录失败: { $error }
+sftp-error-delete = 删除失败: { $error }
+sftp-error-illegal-filename = 文件名包含非法字符
+sftp-error-name-empty = 名称不能为空
+sftp-error-name-separator = 名称不合法：不能包含路径分隔符
+sftp-error-rename = 重命名失败: { $error }
+sftp-error-folder-name-empty = 文件夹名称不能为空
+sftp-error-create-folder = 创建文件夹失败: { $error }
+sftp-error-invalid-target-path = 目标路径不合法
+sftp-error-move = 移动失败: { $error }
+
+# --- ANCHOR-SUB-BYOP-MISC (i18n-cjk-sweep) ---
+# BYOP provider picker 占位条目 + autofill / 日志导出 / Drive 计划提示。
+# 命名前缀:byop-* / workflow-autofill-* / workspace-log-export-* / ai-plan-*
+byop-placeholder-no-provider = 未配置自定义提供商 — 请到 设置 → AI 添加
+byop-placeholder-not-configured = 未配置
+workflow-autofill-requires-byop = Autofill 需要 BYOP 模型。请到 设置 → AI 中配置一个 provider 与模型。
+ai-plan-saved-locally-tooltip = 计划已自动保存到本地。
+workspace-log-export-header = Zap 日志导出
+workspace-log-export-generated-at = 生成时间: { $time }
+workspace-log-export-version = 版本: { $version }
+workspace-log-export-channel = channel: { $channel }
+workspace-log-export-execution-mode = 执行模式: { $mode }
+workspace-log-export-log-dir = 日志目录: { $dir }

@@ -36,16 +36,16 @@ fn write_parameters() -> Value {
         "properties": {
             "command_id": {
                 "type": "string",
-                "description": "之前 run_shell_command 返回的长运行命令 id。"
+                "description": "The long-running command id previously returned by run_shell_command."
             },
             "input": {
                 "type": "string",
-                "description": "要写到 stdin/PTY 的文本。mode=raw 时可使用 <ESC>/<ENTER>/<CTRL-C> 控制键 token。"
+                "description": "The text to write to stdin/PTY. With mode=raw you may use the <ESC>/<ENTER>/<CTRL-C> control-key tokens."
             },
             "mode": {
                 "type": "string",
                 "enum": ["raw", "line", "block"],
-                "description": "raw=原始字节;line=作为一行(自动加换行);block=作为多行块。",
+                "description": "raw = raw bytes; line = as a single line (a newline is appended automatically); block = as a multi-line block.",
                 "default": "line"
             }
         },
@@ -171,11 +171,11 @@ fn read_parameters() -> Value {
         "properties": {
             "command_id": {
                 "type": "string",
-                "description": "运行中命令的 id。"
+                "description": "The id of the running command."
             },
             "delay_seconds": {
                 "type": "integer",
-                "description": "可选: 在指定秒数后返回当前 snapshot;不填则等到命令完成才返回。",
+                "description": "Optional: return the current snapshot after the given number of seconds; if omitted, wait until the command completes.",
                 "minimum": 0
             }
         },

@@ -32,26 +32,26 @@ fn parameters() -> Value {
         "properties": {
             "command": {
                 "type": "string",
-                "description": "要执行的 shell 命令(完整命令行)。"
+                "description": "The shell command to run (the full command line)."
             },
             "is_read_only": {
                 "type": "boolean",
-                "description": "命令是否仅读取信息、不修改文件系统/外部状态(true 时无需用户确认)。",
+                "description": "Whether the command only reads information and does not modify the filesystem or any external state (no user confirmation is needed when true).",
                 "default": false
             },
             "uses_pager": {
                 "type": "boolean",
-                "description": "命令是否会触发 pager(less/more 等)。建议 false,可附加 | cat 之类避免阻塞。",
+                "description": "Whether the command triggers a pager (less/more, etc.). Prefer false, and append something like | cat to avoid blocking.",
                 "default": false
             },
             "is_risky": {
                 "type": "boolean",
-                "description": "命令是否危险(rm -rf、改全局配置等)。设为 true 让用户更醒目地确认。",
+                "description": "Whether the command is dangerous (rm -rf, changing global config, etc.). Set true to make the user confirm more prominently.",
                 "default": false
             },
             "wait_until_complete": {
                 "type": "boolean",
-                "description": "默认 true(等命令结束才返回,适合一次性命令)。dev server / 后台进程 / tail -f / 交互 REPL 这类不会自然退出的命令必须设为 false,否则当前 turn 会卡死永远等不到结果。设 false 后会立刻返回 LongRunningCommandSnapshot,后续 turn 用 read/write_to_long_running_shell_command 继续交互。",
+                "description": "Defaults to true (return only once the command finishes, suited to one-shot commands). Commands that never exit on their own — dev servers, background processes, tail -f, interactive REPLs — MUST set this to false, otherwise the current turn hangs forever waiting for a result. With false it returns a LongRunningCommandSnapshot immediately, and later turns keep interacting via read/write_to_long_running_shell_command.",
                 "default": true
             }
         },

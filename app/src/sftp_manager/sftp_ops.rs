@@ -37,11 +37,11 @@ pub enum SftpOpsError {
 impl std::fmt::Display for SftpOpsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SftpOpsError::Connection(msg) => write!(f, "连接错误: {msg}"),
-            SftpOpsError::Operation(msg) => write!(f, "操作错误: {msg}"),
-            SftpOpsError::LocalIo(msg) => write!(f, "本地 IO 错误: {msg}"),
-            SftpOpsError::NoCredentials(msg) => write!(f, "未找到凭据: {msg}"),
-            SftpOpsError::Cancelled => write!(f, "传输已取消"),
+            SftpOpsError::Connection(msg) => write!(f, "Connection error: {msg}"),
+            SftpOpsError::Operation(msg) => write!(f, "Operation error: {msg}"),
+            SftpOpsError::LocalIo(msg) => write!(f, "Local IO error: {msg}"),
+            SftpOpsError::NoCredentials(msg) => write!(f, "Credentials not found: {msg}"),
+            SftpOpsError::Cancelled => write!(f, "Transfer cancelled"),
         }
     }
 }
@@ -83,7 +83,7 @@ pub fn connect_from_server(
 
 fn resolve_sftp_auth(server: &SshServerInfo) -> Result<ResolvedSshAuth, SftpOpsError> {
     warp_ssh_manager::with_conn(|conn| Ok(SshRepository::resolve_server_auth(conn, server)?))
-        .map_err(|e| SftpOpsError::NoCredentials(format!("解析认证失败: {e}")))
+        .map_err(|e| SftpOpsError::NoCredentials(format!("Failed to resolve credentials: {e}")))
 }
 
 /// 列出远程目录内容，转换为 UI 层 FileEntry
@@ -276,7 +276,7 @@ pub fn upload_file_streaming(
                 // rename 失败时保留远程临时文件，避免数据丢失
                 let temp_display = temp_remote_path.display();
                 return Err(SftpOpsError::Operation(format!(
-                    "重命名远程临时文件失败: {e}。临时文件: {temp_display}"
+                    "Failed to rename the remote temporary file: {e}. Temporary file: {temp_display}"
                 )));
             }
         }
@@ -349,7 +349,7 @@ pub fn download_file_streaming(
                 // rename 失败时保留本地临时文件，避免数据丢失
                 let temp_display = temp_local_path.display();
                 return Err(SftpOpsError::LocalIo(format!(
-                    "重命名失败: {e}。已下载的临时文件保留在: {temp_display}"
+                    "Rename failed: {e}. The downloaded temporary file was kept at: {temp_display}"
                 )));
             }
         }
@@ -473,9 +473,9 @@ fn build_auth_method(
         AuthType::Password | AuthType::OneKey => {
             let password = secret_store
                 .get(&resolved_auth.secret_lookup_id, resolved_auth.secret_kind)
-                .map_err(|e| SftpOpsError::NoCredentials(format!("读取密码失败: {e}")))?
+                .map_err(|e| SftpOpsError::NoCredentials(format!("Failed to read password: {e}")))?
                 .ok_or_else(|| {
-                    SftpOpsError::NoCredentials(format!("服务器 {} 未存储密码", server.host))
+                    SftpOpsError::NoCredentials(format!("No password is stored for server {}", server.host))
                 })?;
             Ok(AuthMethod::Password {
                 password: password.to_string(),
@@ -483,7 +483,7 @@ fn build_auth_method(
         }
         AuthType::Key => {
             let key_path = resolved_auth.key_path.as_ref().ok_or_else(|| {
-                SftpOpsError::NoCredentials("密钥认证但未指定密钥路径".to_string())
+                SftpOpsError::NoCredentials("Key authentication was selected but no key path was specified".to_string())
             })?;
             let expanded = shellexpand_path(key_path);
             let passphrase = secret_store
@@ -537,7 +537,7 @@ mod tests {
     fn test_sftp_ops_error_display_connection() {
         assert_eq!(
             SftpOpsError::Connection("refused".into()).to_string(),
-            "连接错误: refused"
+            "Connection error: refused"
         );
     }
 
@@ -546,7 +546,7 @@ mod tests {
     fn test_sftp_ops_error_display_operation() {
         assert_eq!(
             SftpOpsError::Operation("not found".into()).to_string(),
-            "操作错误: not found"
+            "Operation error: not found"
         );
     }
 
@@ -555,7 +555,7 @@ mod tests {
     fn test_sftp_ops_error_display_local_io() {
         assert_eq!(
             SftpOpsError::LocalIo("disk full".into()).to_string(),
-            "本地 IO 错误: disk full"
+            "Local IO error: disk full"
         );
     }
 
@@ -564,14 +564,14 @@ mod tests {
     fn test_sftp_ops_error_display_no_credentials() {
         assert_eq!(
             SftpOpsError::NoCredentials("no key".into()).to_string(),
-            "未找到凭据: no key"
+            "Credentials not found: no key"
         );
     }
 
     /// 测试 SftpOpsError::Cancelled Display 输出
     #[test]
     fn test_sftp_ops_error_display_cancelled() {
-        assert_eq!(SftpOpsError::Cancelled.to_string(), "传输已取消");
+        assert_eq!(SftpOpsError::Cancelled.to_string(), "Transfer cancelled");
     }
 
     /// 测试从 std::io::Error 转换为 SftpOpsError
@@ -714,7 +714,7 @@ mod tests {
     fn test_sftp_ops_error_connection_empty() {
         assert_eq!(
             SftpOpsError::Connection(String::new()).to_string(),
-            "连接错误: "
+            "Connection error: "
         );
     }
 
@@ -723,7 +723,7 @@ mod tests {
     fn test_sftp_ops_error_operation_empty() {
         assert_eq!(
             SftpOpsError::Operation(String::new()).to_string(),
-            "操作错误: "
+            "Operation error: "
         );
     }
 
@@ -732,7 +732,7 @@ mod tests {
     fn test_sftp_ops_error_local_io_empty() {
         assert_eq!(
             SftpOpsError::LocalIo(String::new()).to_string(),
-            "本地 IO 错误: "
+            "Local IO error: "
         );
     }
 
@@ -741,7 +741,7 @@ mod tests {
     fn test_sftp_ops_error_no_credentials_empty() {
         assert_eq!(
             SftpOpsError::NoCredentials(String::new()).to_string(),
-            "未找到凭据: "
+            "Credentials not found: "
         );
     }
 
@@ -751,7 +751,7 @@ mod tests {
         let s1 = SftpOpsError::Cancelled.to_string();
         let s2 = SftpOpsError::Cancelled.to_string();
         assert_eq!(s1, s2);
-        assert_eq!(s1, "传输已取消");
+        assert_eq!(s1, "Transfer cancelled");
     }
 
     /// 测试 shellexpand_path 多级 ~/ 展开

@@ -3486,3 +3486,76 @@ workflow-enum-variant-placeholder = バリアント
 workflow-enum-variants = バリアント
 quit-warning-dont-save = 保存しない
 quit-warning-show-running-processes = 実行中のプロセスを表示
+
+# --- ANCHOR-SUB-SFTP-MANAGER (i18n-cjk-sweep) ---
+# SFTP ファイルマネージャー:browser / dialogs / context_menu / transfer_panel / file_list。
+# 命名前缀:sftp-*
+sftp-pane-title = ファイル管理
+sftp-dialog-current-name = 現在の名前: { $name }
+sftp-dialog-delete-title = 削除の確認
+sftp-dialog-delete-one = "{ $name }" を削除してもよろしいですか？この操作は取り消せません。
+sftp-dialog-delete-many = { $count } 件の項目を削除してもよろしいですか？この操作は取り消せません。
+sftp-dialog-create-folder-title = 新しいフォルダ
+sftp-dialog-create = 作成
+sftp-dialog-details-title = ファイルの詳細
+sftp-dialog-details-type = 種類
+sftp-dialog-details-size = サイズ
+sftp-dialog-details-modified = 更新日時
+sftp-dialog-details-permissions = 権限
+sftp-dialog-details-path = パス
+sftp-dialog-move-title = ファイルを移動
+sftp-dialog-move-confirm = 移動
+sftp-dialog-move-description = "{ $source }" を { $target } に移動します
+sftp-dialog-overwrite-title = 上書きの確認
+sftp-dialog-overwrite-confirm = 上書き
+sftp-dialog-overwrite-upload = リモートファイル { $name } は既に存在します。上書きしますか？
+sftp-dialog-overwrite-download = 対象ファイル { $name } は既に存在します。上書きしますか？
+sftp-dialog-close-transfer-title = 転送パネルを閉じる
+sftp-dialog-close-transfer-body = 進行中の転送があります。閉じるとすべての転送が中断され、記録が消去されます。閉じてもよろしいですか？
+sftp-file-type-file = ファイル
+sftp-file-type-directory = ディレクトリ
+sftp-file-type-symlink = シンボリックリンク
+sftp-file-type-other = その他
+sftp-menu-open = 開く
+sftp-menu-download = ダウンロード
+sftp-menu-details = 詳細情報
+sftp-column-name = 名前
+sftp-column-size = サイズ
+sftp-column-modified = 更新日時
+sftp-transfer-status-waiting = 待機中
+sftp-transfer-status-active = 転送中
+sftp-transfer-status-done = 完了
+sftp-transfer-status-failed = 失敗
+sftp-transfer-status-cancelled = キャンセル済み
+sftp-transfer-panel-title = 転送 ({ $count })
+sftp-transfer-panel-close-tooltip = 転送パネルを閉じる
+sftp-drop-to-upload = ファイルをドロップしてアップロード
+sftp-error-channel-failed = SFTP チャネルの作成に失敗しました: { $error }
+sftp-error-connection-cancelled = 接続がキャンセルされました
+sftp-error-server-config-missing = サーバー設定が見つかりません
+sftp-error-server-config-read = サーバー設定の読み込みに失敗しました: { $error }
+sftp-error-not-connected = サーバーに接続されていません
+sftp-error-list-dir = ディレクトリの一覧取得に失敗しました: { $error }
+sftp-error-delete = 削除に失敗しました: { $error }
+sftp-error-illegal-filename = ファイル名に使用できない文字が含まれています
+sftp-error-name-empty = 名前を空にはできません
+sftp-error-name-separator = 名前が不正です：パス区切り文字は使用できません
+sftp-error-rename = 名前の変更に失敗しました: { $error }
+sftp-error-folder-name-empty = フォルダ名を空にはできません
+sftp-error-create-folder = フォルダの作成に失敗しました: { $error }
+sftp-error-invalid-target-path = 対象パスが不正です
+sftp-error-move = 移動に失敗しました: { $error }
+
+# --- ANCHOR-SUB-BYOP-MISC (i18n-cjk-sweep) ---
+# BYOP provider picker のプレースホルダー項目 + autofill / ログ書き出し / Drive プラン通知。
+# 命名前缀:byop-* / workflow-autofill-* / workspace-log-export-* / ai-plan-*
+byop-placeholder-no-provider = カスタムプロバイダーが未設定です — 設定 → AI で追加してください
+byop-placeholder-not-configured = 未設定
+workflow-autofill-requires-byop = Autofill には BYOP モデルが必要です。設定 → AI でプロバイダーとモデルを構成してください。
+ai-plan-saved-locally-tooltip = プランはローカルに自動保存されました。
+workspace-log-export-header = Zap ログ書き出し
+workspace-log-export-generated-at = 生成時刻: { $time }
+workspace-log-export-version = バージョン: { $version }
+workspace-log-export-channel = channel: { $channel }
+workspace-log-export-execution-mode = 実行モード: { $mode }
+workspace-log-export-log-dir = ログディレクトリ: { $dir }

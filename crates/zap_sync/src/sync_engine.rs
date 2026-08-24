@@ -126,7 +126,7 @@ impl<C: GistOps> SyncEngine<C> {
             .find_gist(platform, token_owned.clone())
             .await
             .map_err(|e| SyncEngineError::Gist(e.to_string()))?
-            .ok_or_else(|| SyncEngineError::Gist("Gist 未找到".to_string()))?;
+            .ok_or_else(|| SyncEngineError::Gist("Gist not found".to_string()))?;
 
         let remote_content = self
             .client

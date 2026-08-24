@@ -37,7 +37,7 @@ fn parameters() -> Value {
         "properties": {
             "name": {
                 "type": "string",
-                "description": "Skill 名称(与 system prompt 内 <available_skills><skill><name> 字段完全一致)。"
+                "description": "The skill name (exactly as it appears in the <available_skills><skill><name> field of the system prompt)."
             }
         },
         "required": ["name"],

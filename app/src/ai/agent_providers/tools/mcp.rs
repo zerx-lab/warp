@@ -88,7 +88,7 @@ pub fn build_mcp_tool_defs(ctx: &MCPContext) -> Vec<(String, String, Value)> {
                 .map(|d| d.to_string())
                 .unwrap_or_default();
             let prefixed_desc = if desc.is_empty() {
-                format!("MCP server `{}` 的工具 {}", server.name, tool.name)
+                format!("Tool {} from MCP server `{}`", tool.name, server.name)
             } else {
                 format!("[MCP/{}] {}", server.name, desc)
             };
@@ -114,8 +114,8 @@ pub fn build_mcp_tool_defs(ctx: &MCPContext) -> Vec<(String, String, Value)> {
         // 同样需要跨请求稳定。按字面字典序排序,避免 HashMap iterate 顺序漂移。
         available_uris.sort();
         let desc = format!(
-            "读取 MCP server 暴露的资源(文件 / 数据库 / API 等)。\
-             可用资源:\n- {}",
+            "Read a resource exposed by an MCP server (a file, database, API, etc.).\
+             Available resources:\n- {}",
             available_uris.join("\n- ")
         );
         let schema = json!({
@@ -123,11 +123,11 @@ pub fn build_mcp_tool_defs(ctx: &MCPContext) -> Vec<(String, String, Value)> {
             "properties": {
                 "uri": {
                     "type": "string",
-                    "description": "资源 URI(从可用资源列表中选)。"
+                    "description": "The resource URI (pick one from the list of available resources)."
                 },
                 "server": {
                     "type": "string",
-                    "description": "可选: 资源所属 MCP server 的 name(会按 sanitize 规则匹配)。当多个 server 暴露同名 uri 时必填。"
+                    "description": "Optional: the name of the MCP server the resource belongs to (matched using the sanitize rules). Required when several servers expose the same uri."
                 }
             },
             "required": ["uri"],
