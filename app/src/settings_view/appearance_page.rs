@@ -1771,6 +1771,7 @@ impl AppearanceSettingsPageView {
             Language::English => crate::t_static!("settings-language-english"),
             Language::SimplifiedChinese => "简体中文",
             Language::Japanese => "日本語",
+            Language::Russian => "Русский",
         }
     }
 
@@ -3368,7 +3369,7 @@ impl SettingsWidget for LanguageWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "language locale 语言 中文 english 翻译 international i18n"
+        "language locale 语言 中文 english русский russian 翻译 international i18n"
     }
 
     fn render(

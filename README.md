@@ -20,7 +20,7 @@ Zap is an open, local-first terminal with first-class AI and agent support. Plug
 - **Built-in SSH host manager** — manage hosts, configs and sessions inside the terminal, with tmux integration.
 - **Editable system prompts** — minijinja templates rendered on the client.
 - **Rendering fixes** — tuned Markdown pipeline; CJK soft-wrap caret and bold subpixel fixes.
-- **Localized UI** — English / Simplified Chinese / Japanese out of the box, community-extensible.
+- **Localized UI** — English / Simplified Chinese / Japanese / Russian out of the box, community-extensible.
 - **Privacy defaults** — Cloud Agent / Computer Use / Referral / telemetry off by default.
 
 ## Migrating from OpenWarp or Warp
