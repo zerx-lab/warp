@@ -71,6 +71,15 @@ impl WorkspaceInfoBarParts {
     }
 }
 
+/// 有改动时两侧都展示, 包括 `+0` / `−0`, 避免页签只显示删除或只显示新增.
+pub(crate) fn workspace_info_bar_diff_tokens(lines_added: u32, lines_removed: u32) -> Vec<String> {
+    if lines_added == 0 && lines_removed == 0 {
+        Vec::new()
+    } else {
+        vec![format!("+{lines_added}"), format!("−{lines_removed}")]
+    }
+}
+
 /// 信息栏分段。无 upstream 省略 from; +/- 都为 0 时 diff 为 0。
 pub(crate) fn workspace_info_bar_parts(
     branch: &str,
@@ -109,7 +118,9 @@ pub(crate) fn workspace_info_bar_label(
         chunks.push(format!("from {upstream}"));
     }
     if parts.has_diff() {
-        chunks.push(format!("+{}  −{}", parts.lines_added, parts.lines_removed));
+        chunks.push(
+            workspace_info_bar_diff_tokens(parts.lines_added, parts.lines_removed).join("  "),
+        );
     }
     chunks.join("  ·  ")
 }
@@ -122,6 +133,17 @@ pub(crate) fn header_items_excluding_lifted_tools_panel(
     items
         .into_iter()
         .filter(|item| !(full_height_chrome && *item == HeaderToolbarItemKind::ToolsPanel))
+        .collect()
+}
+
+/// 信息栏已把 Code Review 按钮挪到中间时, 从顶栏左右按钮配置中去掉它, 避免画两次.
+pub(crate) fn header_items_excluding_lifted_code_review(
+    items: impl IntoIterator<Item = HeaderToolbarItemKind>,
+    workspace_info_bar: bool,
+) -> Vec<HeaderToolbarItemKind> {
+    items
+        .into_iter()
+        .filter(|item| !(workspace_info_bar && *item == HeaderToolbarItemKind::CodeReview))
         .collect()
 }
 

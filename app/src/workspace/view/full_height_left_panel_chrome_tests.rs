@@ -1,7 +1,8 @@
 use super::{
-    header_items_excluding_lifted_tools_panel, left_panel_titlebar_leading_inset,
-    short_upstream_name, tab_bar_leading_padding, use_full_height_left_panel_chrome,
-    use_workspace_info_bar, workspace_info_bar_label, workspace_info_bar_parts,
+    header_items_excluding_lifted_code_review, header_items_excluding_lifted_tools_panel,
+    left_panel_titlebar_leading_inset, short_upstream_name, tab_bar_leading_padding,
+    use_full_height_left_panel_chrome, use_workspace_info_bar, workspace_info_bar_diff_tokens,
+    workspace_info_bar_label, workspace_info_bar_parts,
 };
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 
@@ -52,27 +53,78 @@ fn workspace_info_bar_label_omits_missing_upstream_and_zero_diff() {
         "feature-a"
     );
     assert_eq!(
-        workspace_info_bar_label("feature-a", Some("refs/remotes/origin/main"), Some(12), Some(3)),
+        workspace_info_bar_label(
+            "feature-a",
+            Some("refs/remotes/origin/main"),
+            Some(12),
+            Some(3)
+        ),
         "feature-a  ·  from main  ·  +12  −3"
     );
     assert_eq!(
         workspace_info_bar_label("feature-a", Some("refs/remotes/origin/main"), None, None),
         "feature-a  ·  from main"
     );
+    assert_eq!(
+        workspace_info_bar_label("main", Some("refs/remotes/origin/main"), Some(0), Some(386),),
+        "main  ·  from main  ·  +0  −386"
+    );
+    assert_eq!(
+        workspace_info_bar_label("main", Some("refs/remotes/origin/main"), Some(12), Some(0)),
+        "main  ·  from main  ·  +12  −0"
+    );
+}
+
+#[test]
+fn workspace_info_bar_diff_tokens_keep_zero_side_when_the_other_side_is_nonzero() {
+    assert_eq!(
+        workspace_info_bar_diff_tokens(0, 386),
+        vec!["+0".to_string(), "−386".to_string()]
+    );
+    assert_eq!(
+        workspace_info_bar_diff_tokens(12, 0),
+        vec!["+12".to_string(), "−0".to_string()]
+    );
+    assert_eq!(
+        workspace_info_bar_diff_tokens(12, 3),
+        vec!["+12".to_string(), "−3".to_string()]
+    );
+    assert_eq!(workspace_info_bar_diff_tokens(0, 0), Vec::<String>::new());
 }
 
 #[test]
 fn workspace_info_bar_parts_exposes_diff_counts_for_colored_render() {
-    let parts = workspace_info_bar_parts(
-        "fix",
-        Some("refs/remotes/origin/main"),
-        Some(46),
-        Some(1),
-    );
+    let parts =
+        workspace_info_bar_parts("fix", Some("refs/remotes/origin/main"), Some(46), Some(1));
     assert_eq!(parts.from_upstream.as_deref(), Some("main"));
     assert_eq!(parts.lines_added, 46);
     assert_eq!(parts.lines_removed, 1);
     assert!(parts.has_diff());
+}
+
+#[test]
+fn header_items_excluding_lifted_code_review_drops_code_review_only_when_info_bar_is_on() {
+    let items = vec![
+        HeaderToolbarItemKind::TabsPanel,
+        HeaderToolbarItemKind::CodeReview,
+        HeaderToolbarItemKind::NotificationsMailbox,
+    ];
+
+    assert_eq!(
+        header_items_excluding_lifted_code_review(items.clone(), true),
+        vec![
+            HeaderToolbarItemKind::TabsPanel,
+            HeaderToolbarItemKind::NotificationsMailbox,
+        ]
+    );
+    assert_eq!(
+        header_items_excluding_lifted_code_review(items, false),
+        vec![
+            HeaderToolbarItemKind::TabsPanel,
+            HeaderToolbarItemKind::CodeReview,
+            HeaderToolbarItemKind::NotificationsMailbox,
+        ]
+    );
 }
 
 #[test]
@@ -123,20 +175,8 @@ fn tab_bar_leading_padding_omits_traffic_lights_when_chrome_is_on() {
 
 #[test]
 fn left_panel_titlebar_leading_inset_takes_macos_traffic_lights_when_chrome_is_on() {
-    assert_eq!(
-        left_panel_titlebar_leading_inset(true, false, 64.),
-        64.
-    );
-    assert_eq!(
-        left_panel_titlebar_leading_inset(true, true, 64.),
-        0.
-    );
-    assert_eq!(
-        left_panel_titlebar_leading_inset(false, false, 64.),
-        0.
-    );
-    assert_eq!(
-        left_panel_titlebar_leading_inset(true, false, 0.),
-        0.
-    );
+    assert_eq!(left_panel_titlebar_leading_inset(true, false, 64.), 64.);
+    assert_eq!(left_panel_titlebar_leading_inset(true, true, 64.), 0.);
+    assert_eq!(left_panel_titlebar_leading_inset(false, false, 64.), 0.);
+    assert_eq!(left_panel_titlebar_leading_inset(true, false, 0.), 0.);
 }

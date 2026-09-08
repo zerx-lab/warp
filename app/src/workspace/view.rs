@@ -29,7 +29,8 @@ use crate::workspace::cross_window_tab_drag::{
 pub(crate) use onboarding::OnboardingTutorial;
 
 use self::full_height_left_panel_chrome::{
-    use_workspace_info_bar, workspace_info_bar_label, workspace_info_bar_parts,
+    header_items_excluding_lifted_code_review, use_workspace_info_bar,
+    workspace_info_bar_diff_tokens, workspace_info_bar_label, workspace_info_bar_parts,
     WorkspaceInfoBarGitStats, WorkspaceInfoBarParts,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
@@ -1111,9 +1112,11 @@ impl Workspace {
         let theme = appearance.theme();
         let muted = theme.sub_text_color(theme.background());
         let parts = self.workspace_info_bar_parts(ctx);
+        let show_code_review_button = HeaderToolbarItemKind::CodeReview.is_available(ctx);
         let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.);
+            .with_spacing(6.)
+            .with_main_axis_size(MainAxisSize::Max);
         row.add_child(
             Text::new_inline(
                 parts.branch.clone(),
@@ -1139,31 +1142,27 @@ impl Workspace {
                 .finish(),
             );
         }
-        if parts.has_diff() {
+        if show_code_review_button {
+            row.add_child(self.render_right_panel_button(appearance, ctx));
+        } else if parts.has_diff() {
             row.add_child(
                 Text::new_inline("·", appearance.ui_font_family(), appearance.ui_font_body())
                     .with_color(muted.into())
                     .finish(),
             );
-            if parts.lines_added > 0 {
+            for token in workspace_info_bar_diff_tokens(parts.lines_added, parts.lines_removed) {
+                let color = if token.starts_with('+') {
+                    theme.terminal_colors().normal.green
+                } else {
+                    theme.terminal_colors().normal.red
+                };
                 row.add_child(
                     Text::new_inline(
-                        format!("+{}", parts.lines_added),
+                        token,
                         appearance.ui_font_family(),
                         appearance.ui_font_body(),
                     )
-                    .with_color(theme.terminal_colors().normal.green.into())
-                    .finish(),
-                );
-            }
-            if parts.lines_removed > 0 {
-                row.add_child(
-                    Text::new_inline(
-                        format!("−{}", parts.lines_removed),
-                        appearance.ui_font_family(),
-                        appearance.ui_font_body(),
-                    )
-                    .with_color(theme.terminal_colors().normal.red.into())
+                    .with_color(color.into())
                     .finish(),
                 );
             }
@@ -1204,8 +1203,8 @@ impl Workspace {
         workspace_info_bar_label(
             &parts.branch,
             parts.from_upstream.as_deref(),
-            Some(parts.lines_added).filter(|n| *n > 0),
-            Some(parts.lines_removed).filter(|n| *n > 0),
+            Some(parts.lines_added),
+            Some(parts.lines_removed),
         )
     }
 
@@ -17859,11 +17858,13 @@ impl Workspace {
             .header_toolbar_chip_selection
             .clone();
         if knowledge_center_closed && !self.is_theme_chooser_open() {
-            let left_toolbar_buttons = config
-                .left_items()
-                .into_iter()
-                .filter_map(|item| self.render_header_toolbar_button(&item, appearance, ctx))
-                .collect::<Vec<_>>();
+            let left_toolbar_buttons = header_items_excluding_lifted_code_review(
+                config.left_items(),
+                self.use_workspace_info_bar(ctx),
+            )
+            .into_iter()
+            .filter_map(|item| self.render_header_toolbar_button(&item, appearance, ctx))
+            .collect::<Vec<_>>();
             let left_toolbar_button_count = left_toolbar_buttons.len();
             for (index, button) in left_toolbar_buttons.into_iter().enumerate() {
                 let is_last_left_toolbar_button = index + 1 == left_toolbar_button_count;
@@ -18277,7 +18278,10 @@ impl Workspace {
             );
         }
 
-        for item in config.right_items() {
+        for item in header_items_excluding_lifted_code_review(
+            config.right_items(),
+            self.use_workspace_info_bar(ctx),
+        ) {
             if let Some(button) = self.render_header_toolbar_button(&item, appearance, ctx) {
                 target.add_child(button);
             }
