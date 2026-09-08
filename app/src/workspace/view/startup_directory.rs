@@ -5,9 +5,7 @@ use crate::project_organization::model::ProjectOrganizationModel;
 use crate::terminal::available_shells::AvailableShell;
 #[cfg(feature = "local_tty")]
 use crate::terminal::available_shells::AvailableShells;
-use crate::terminal::session_settings::{
-    NewSessionSource, SessionSettings, WorkingDirectoryMode,
-};
+use crate::terminal::session_settings::{NewSessionSource, SessionSettings, WorkingDirectoryMode};
 use crate::terminal::ShellLaunchData;
 use std::path::{Path, PathBuf};
 use warpui::SingletonEntity;

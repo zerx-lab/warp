@@ -2543,10 +2543,8 @@ fn handle_window_state_change_resyncs_left_panel_titlebar_inset_on_fullscreen() 
             let mut current = previous.clone();
             previous.is_active_window_fullscreen = Some(false);
             current.is_active_window_fullscreen = Some(true);
-            workspace.handle_window_state_change(
-                &StateEvent::ValueChanged { current, previous },
-                ctx,
-            );
+            workspace
+                .handle_window_state_change(&StateEvent::ValueChanged { current, previous }, ctx);
 
             assert_eq!(
                 workspace
